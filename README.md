@@ -1,10 +1,34 @@
-# klaude CLI: A wrapper for Claude Code interactive CLI
+# klaude: A process wrapper for Claude Code with multi-agent session management
 
-Usable by both the user and by Claude, this wrapper lets you and Claude spin up agents in the same workspace. Agents in the workspace know about each other.
+A wrapper that spawns Claude Code as a subprocess and manages multiple agent sessions with seamless context switching. Enables delegating work to specialized agents while maintaining stateful session history.
 
-Keep log of active sessions, can go back to previous sessions
+## Quick Start
 
-	•	Later: Add a CLI API layer (like klaude api) to let you query Claude directly without state — e.g., scripting integrations.
+```bash
+cd your-project
+klaude
+```
+
+This launches Claude Code inside a wrapper. Inside Claude, you can:
+
+```bash
+klaude start orchestrator "build auth system"
+klaude sessions
+enter-agent <agent-id>  # switch to another agent
+```
+
+The wrapper uses marker files and process signals to handle session switching seamlessly.
+
+## Architecture
+
+**User runs `klaude` with no args** → Wrapper spawns Claude Code subprocess → User interacts with Claude normally, but can now spawn/manage agents
+
+**Inside Claude**, commands like `klaude start`, `enter-agent`, etc. communicate with the wrapper via:
+- `.next-session` marker files (for session switching)
+- Process signals (SIGTERM to trigger switch detection)
+- SQLite registry (`~/.klaude/sessions.db`) tracking all sessions
+
+## State & Storage
 
 ~/.klaude/
   ├── sessions.db         # SQLite for session metadata
@@ -12,13 +36,17 @@ Keep log of active sessions, can go back to previous sessions
   │    ├── session-123.log
   │    ├── session-124.log
   ├── config.yaml
-
-
-The following commands only work from _within_ the klaude wrapper, which keeps all of the session information together. Many of these commands are meant to be run by Claude Code itself, so it can manage and communicate with other instances.
+  ├── .active-pids.json   # Track running Claude Code processes
+  ├── .next-session       # Marker file for session switching
+  └── .wrapper-pid        # Wrapper process ID
 
 ## Commands
 
+All commands work from _within_ the Claude Code process (inside the wrapper). Many are meant to be run by Claude Code itself for multi-agent orchestration.
+
+```
 klaude <command> [options]
+```
 
 Commands:
   klaude start <agent_type> <prompt> [agent_count] [options]
@@ -51,8 +79,25 @@ Commands:
       -t, --tail      Tails the logs (tail -f style)
       -s, --summary   Summarize the session
 
-Klaude is stateful, so after running "/exit", the state is saved.
+Klaude is stateful—session data persists in SQLite after you exit. You can resume or inspect previous sessions later.
 
-## Stretch Goals
-- API—allow other services to interact with kluade
-- 
+## How Session Switching Works
+
+1. User calls `enter-agent <agent-id>` from within Claude
+2. `enter-agent` writes `.next-session` marker file with target session ID
+3. `enter-agent` kills the current Claude process (SIGTERM)
+4. Wrapper detects the process exit and sees the marker file
+5. Wrapper spawns Claude again with `--resume <agent-id>`
+6. User is now in the other agent's session
+
+This enables seamless multi-agent context switching without data loss.
+
+## Planned Features
+- Proper agent subprocess spawning (currently DB skeleton)
+- Interactive wrapper loop in TypeScript
+- CLI integration within Claude Code sessions
+- API layer for non-interactive integrations
+
+## Documentation
+
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Detailed notes on the session-switching mechanism, bash implementation, and TypeScript re-implementation requirements. Read this before implementing the wrapper in TypeScript. 
