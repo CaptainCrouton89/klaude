@@ -19,6 +19,10 @@ enter-agent <agent-id>  # switch to another agent
 
 The wrapper uses marker files and process signals to handle session switching seamlessly.
 
+### Claude Binary Path
+
+Set the path to the Claude Code executable with `CLAUDE_BINARY` (or `KLAUDE_CLAUDE_BINARY`). You can also persist it by editing `~/.klaude/config.yaml` and setting `wrapper.claudeBinary`. The default points to `/opt/homebrew/bin/claude`.
+
 ## Architecture
 
 **User runs `klaude` with no args** → Wrapper spawns Claude Code subprocess → User interacts with Claude normally, but can now spawn/manage agents
