@@ -9,13 +9,7 @@ Klaude is a TypeScript CLI wrapper for Claude Code that enables multi-agent sess
 ## Build & Development Commands
 
 ```bash
-npm run build       # Build the TypeScript project
-npm run dev         # Watch mode for development
-npm start           # Run the CLI
-npm run format      # Format code with Prettier
-npm run lint        # Lint with ESLint
-npm test            # Run tests with Vitest
-npm run clean       # Clean build artifacts
+pnpm run build       # Build the TypeScript project
 ```
 
 ## Project Structure

@@ -224,6 +224,7 @@ function initializeSchema(db: Database): void {
   const schema = `
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
+      claude_session_id TEXT,
       agent_type TEXT NOT NULL,
       parent_session_id TEXT REFERENCES sessions(id),
       created_at INTEGER NOT NULL,
@@ -273,5 +274,30 @@ function initializeSchema(db: Database): void {
     // Unknown error - re-throw with context
     const errorMessage = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to initialize schema: ${errorMessage}`);
+  }
+
+  // Ensure claude_session_id column exists on existing databases
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN claude_session_id TEXT');
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      (!error.message.includes('duplicate column name') && !error.message.includes('already exists'))
+    ) {
+      throw new Error(`Failed to ensure claude_session_id column: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_claude_session_id ON sessions(claude_session_id)');
+  } catch (error) {
+    if (error instanceof Error && (error.message.includes('already exists') || error.message.includes('duplicate index'))) {
+      return;
+    }
+    if (error instanceof Error && error.message.includes('no such column')) {
+      return;
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to ensure idx_sessions_claude_session_id index: ${errorMessage}`);
   }
 }

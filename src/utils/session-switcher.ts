@@ -42,6 +42,7 @@ export interface SessionSwitchResult {
 
 /**
  * Write the session marker and terminate the active Claude CLI so the wrapper can resume.
+ * @param sessionId Claude Code session identifier to resume.
  */
 export async function scheduleSessionSwitch(sessionId: string, options: SessionSwitchOptions = {}): Promise<SessionSwitchResult> {
   const klaudeHome = getKlaudeHome();

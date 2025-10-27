@@ -10,6 +10,8 @@ import chalk from 'chalk';
 import { getKlaudeHome } from '@/utils/path-helper.js';
 import { loadConfig } from '@/services/config-loader.js';
 import { KlaudeConfig } from '@/types/index.js';
+import { initializeDatabase } from '@/db/database.js';
+import { createSessionManager } from '@/db/session-manager.js';
 
 const WRAPPER_LOG_PATH = path.join(os.tmpdir(), 'klaude-wrapper.log');
 
@@ -23,6 +25,7 @@ export async function runWrapper(initialArgs: string[] = []): Promise<number> {
   const wrapperPidFile = path.join(klaudeHome, '.wrapper-pid');
   const claudePidFile = path.join(klaudeHome, '.claude-pid');
   let currentArgs = [...initialArgs];
+  let currentResumeSessionId: string | null = null;
 
   await fs.mkdir(klaudeHome, { recursive: true });
   await writeWrapperPid(wrapperPidFile);
@@ -37,6 +40,20 @@ export async function runWrapper(initialArgs: string[] = []): Promise<number> {
 
   try {
     while (true) {
+      // If no args provided and no session tracked yet, try to resume most recent
+      if (currentArgs.length === 0 && currentResumeSessionId === null) {
+        const recentSession = await getMostRecentSession(debugEnabled);
+        if (recentSession) {
+          await logDebug(debugEnabled, `Resuming most recent Claude session: ${recentSession.resumeId} (klaude ${recentSession.klaudeId})`);
+          console.error(chalk.blue('↻'), `Resuming session ${recentSession.resumeId}`);
+          currentResumeSessionId = recentSession.resumeId;
+          currentArgs = ['--resume', recentSession.resumeId];
+          await activateResumeSession(recentSession.resumeId, debugEnabled);
+        }
+        // If no recent session found, leave args empty - Claude will handle it
+      }
+
+      await logDebug(debugEnabled, `Current resume session: ${currentResumeSessionId || 'none'}`);
       await logDebug(debugEnabled, `Launching ${claudeBinary} ${currentArgs.join(' ')}`);
 
       const child = spawn(claudeBinary, currentArgs, {
@@ -67,8 +84,10 @@ export async function runWrapper(initialArgs: string[] = []): Promise<number> {
       const nextSessionId = await readNextSession(nextSessionFile);
       if (nextSessionId) {
         console.error(chalk.blue('↻'), `Session switch detected, resuming ${nextSessionId}`);
-        await logDebug(debugEnabled, `Resuming session ${nextSessionId}`);
+        await logDebug(debugEnabled, `Switching from ${currentResumeSessionId || 'none'} to ${nextSessionId}`);
+        currentResumeSessionId = nextSessionId;
         currentArgs = ['--resume', nextSessionId];
+        await activateResumeSession(nextSessionId, debugEnabled);
         continue;
       }
 
@@ -76,6 +95,43 @@ export async function runWrapper(initialArgs: string[] = []): Promise<number> {
     }
   } finally {
     await removeFileIfExists(wrapperPidFile);
+  }
+}
+
+/**
+ * Get the most recently active session from the database
+ */
+async function getMostRecentSession(debugEnabled: boolean): Promise<{ resumeId: string; klaudeId: string } | null> {
+  try {
+    await initializeDatabase();
+    const sessionManager = createSessionManager();
+    const sessions = await sessionManager.listSessions();
+
+    if (sessions.length === 0) {
+      return null;
+    }
+
+    // Prefer sessions that have a Claude session ID recorded
+    const withClaudeId = sessions
+      .filter(session => typeof session.claudeSessionId === 'string' && session.claudeSessionId.trim().length > 0)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+
+    if (withClaudeId.length > 0) {
+      const top = withClaudeId[0];
+      return { resumeId: top.claudeSessionId!, klaudeId: top.id };
+    }
+
+    // Fall back to the most recently updated session even if Claude ID is missing
+    const sorted = sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    const fallback = sorted[0];
+    await logDebug(debugEnabled, `No Claude session IDs found; falling back to klaude session ${fallback.id}`);
+    return { resumeId: fallback.id, klaudeId: fallback.id };
+  } catch (error) {
+    await logDebug(
+      debugEnabled,
+      `Failed to get recent session: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return null;
   }
 }
 
@@ -160,4 +216,25 @@ function resolveClaudeBinary(config: KlaudeConfig): string {
   }
 
   return 'claude';
+}
+
+async function activateResumeSession(resumeId: string, debugEnabled: boolean): Promise<void> {
+  try {
+    await initializeDatabase();
+    const sessionManager = createSessionManager();
+    const klaudeSession =
+      (await sessionManager.getSessionByClaudeId(resumeId)) ?? (await sessionManager.getSession(resumeId));
+
+    if (klaudeSession) {
+      await sessionManager.activateSession(klaudeSession.id);
+      await logDebug(debugEnabled, `Activated Klaude session ${klaudeSession.id} for resume ${resumeId}`);
+    } else {
+      await logDebug(debugEnabled, `No Klaude session found for resume ${resumeId}`);
+    }
+  } catch (error) {
+    await logDebug(
+      debugEnabled,
+      `Failed to activate session for ${resumeId}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }

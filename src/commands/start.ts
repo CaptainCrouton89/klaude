@@ -37,7 +37,8 @@ export async function startCommand(options: StartCommandOptions, context: CLICon
     }
 
     const sessionIds: string[] = [];
-    const sessionSummaries: Array<{ sessionId: string; status: SessionStatus; result?: string }> = [];
+    const claudeSessionIds: string[] = [];
+    const sessionSummaries: Array<{ sessionId: string; claudeSessionId?: string; status: SessionStatus; result?: string }> = [];
     const errors: string[] = [];
     let overallSuccess = true;
 
@@ -110,10 +111,14 @@ export async function startCommand(options: StartCommandOptions, context: CLICon
       if (session) {
         const summary = {
           sessionId: session.id,
+          claudeSessionId: session.claudeSessionId,
           status: session.status as SessionStatus,
           result: session.result ?? latestResult,
         };
         sessionSummaries.push(summary);
+        if (session.claudeSessionId) {
+          claudeSessionIds.push(session.claudeSessionId);
+        }
 
         if (session.status === 'failed') {
           overallSuccess = false;
@@ -141,6 +146,7 @@ export async function startCommand(options: StartCommandOptions, context: CLICon
       sessionIds,
       sessions: sessionSummaries,
       errors,
+      claudeSessionIds,
       count: sessionIds.length,
       detached: detach,
     };

@@ -11,8 +11,6 @@ export const DEFAULT_CONFIG: KlaudeConfig = {
     permissionMode: 'bypassPermissions',
   },
   session: {
-    autoSaveIntervalMs: 5000,
-    logRetentionDays: 30,
     maxConcurrentAgents: 10,
   },
   server: {

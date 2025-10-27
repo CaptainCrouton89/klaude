@@ -12,6 +12,7 @@ export type LogEntryType = 'assistant' | 'user' | 'tool_use' | 'system' | 'error
  */
 export interface Session {
   id: string;
+  claudeSessionId?: string;
   agentType: AgentType;
   parentSessionId?: string;
   createdAt: Date;
@@ -28,6 +29,7 @@ export interface Session {
  */
 export interface Agent {
   sessionId: string;
+  claudeSessionId?: string;
   type: AgentType;
   status: AgentStatus;
   abortController: AbortController;
@@ -53,6 +55,7 @@ export interface Message {
 export interface ISessionManager {
   createSession(agentType: AgentType, prompt: string, parentSessionId?: string): Promise<Session>;
   getSession(sessionId: string): Promise<Session | null>;
+  getSessionByClaudeId(claudeSessionId: string): Promise<Session | null>;
   updateSession(sessionId: string, updates: Partial<Session>): Promise<void>;
   closeSession(sessionId: string, result: string): Promise<void>;
   listSessions(filter?: Partial<Session>): Promise<Session[]>;
@@ -106,8 +109,6 @@ export interface KlaudeConfig {
     fallbackModel?: string;
   };
   session: {
-    autoSaveIntervalMs?: number;
-    logRetentionDays?: number;
     maxConcurrentAgents?: number;
   };
   server?: {
@@ -190,6 +191,7 @@ export interface QueryResult<T> {
  */
 export interface SessionMetadata {
   id: string;
+  claudeSessionId?: string;
   agentType: AgentType;
   status: SessionStatus;
   createdAt: Date;

@@ -76,6 +76,7 @@ export class AgentManager implements IAgentManager {
     // Create agent record
     const agent: Agent = {
       sessionId: session.id,
+      claudeSessionId: undefined,
       type: agentType,
       status: 'idle',
       abortController: new AbortController(),
@@ -114,6 +115,7 @@ export class AgentManager implements IAgentManager {
   private async runAgentSession(agent: Agent, prompt: string, options: StartAgentOptions = {}): Promise<void> {
     const sessionId = agent.sessionId;
     const collectedAssistantMessages: string[] = [];
+    let linkedClaudeSessionId: string | null = null;
 
     try {
       // Dynamically import the SDK with expanded home path
@@ -126,6 +128,8 @@ export class AgentManager implements IAgentManager {
       });
 
       for await (const message of stream as AsyncIterable<SDKMessage>) {
+        linkedClaudeSessionId = await this.maybeLinkClaudeSessionId(sessionId, linkedClaudeSessionId, message);
+
         if (message.type === 'assistant') {
           const assistantText = this.extractAssistantText(message as SDKAssistantMessage);
           if (assistantText) {
@@ -198,6 +202,44 @@ export class AgentManager implements IAgentManager {
     }
 
     return queryOptions;
+  }
+
+  /**
+   * Record the Claude session ID associated with this Klaude session if present.
+   */
+  private async maybeLinkClaudeSessionId(
+    sessionId: string,
+    currentClaudeSessionId: string | null,
+    message: SDKMessage
+  ): Promise<string | null> {
+    const candidate = this.extractClaudeSessionId(message);
+    if (!candidate || candidate === currentClaudeSessionId) {
+      return currentClaudeSessionId;
+    }
+
+    await this.sessionManager.updateSession(sessionId, { claudeSessionId: candidate });
+    if (!currentClaudeSessionId) {
+      await this.logger.log(sessionId, 'system', `Linked to Claude session ${candidate}`);
+    }
+    const agent = this.agents.get(sessionId);
+    if (agent) {
+      agent.claudeSessionId = candidate;
+    }
+    return candidate;
+  }
+
+  /**
+   * Pull Claude session ID off of SDK messages when available.
+   */
+  private extractClaudeSessionId(message: SDKMessage): string | null {
+    if (!message || typeof message !== 'object') {
+      return null;
+    }
+    const candidate = (message as { session_id?: unknown }).session_id;
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+    return null;
   }
 
   /**

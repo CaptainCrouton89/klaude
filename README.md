@@ -1,6 +1,6 @@
 # klaude: A process wrapper for Claude Code with multi-agent session management
 
-A wrapper that spawns Claude Code as a subprocess and manages multiple agent sessions with seamless context switching. Enables delegating work to specialized agents while maintaining stateful session history.
+A wrapper that spawns Claude Code as a subprocess and manages multiple agent sessions with seamless context switching. Enables delegating work to specialized agents while maintaining stateful session history. Klaude now tracks Claude Code's native session identifiers so `--resume` always targets the correct conversation.
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ klaude sessions
 enter-agent <agent-id>  # switch to another agent
 ```
 
-The wrapper uses marker files and process signals to handle session switching seamlessly.
+The wrapper uses marker files and process signals to handle session switching seamlessly. When agents run, Klaude records both its internal session ID _and_ Claude Code's session ID; the latter is what the wrapper uses for `--resume`.
 
 ### Claude Binary Path
 
@@ -35,7 +35,7 @@ Set the path to the Claude Code executable with `CLAUDE_BINARY` (or `KLAUDE_CLAU
 ## State & Storage
 
 ~/.klaude/
-  ├── sessions.db         # SQLite for session metadata
+  ├── sessions.db         # SQLite for session metadata + linked Claude session IDs
   ├── logs/
   │    ├── session-123.log
   │    ├── session-124.log
@@ -88,13 +88,40 @@ Klaude is stateful—session data persists in SQLite after you exit. You can res
 ## How Session Switching Works
 
 1. User calls `enter-agent <agent-id>` from within Claude
-2. `enter-agent` writes `.next-session` marker file with target session ID
+2. `enter-agent` writes `.next-session` marker file with the target Claude session ID
 3. `enter-agent` kills the current Claude process (SIGTERM)
 4. Wrapper detects the process exit and sees the marker file
-5. Wrapper spawns Claude again with `--resume <agent-id>`
-6. User is now in the other agent's session
+5. Wrapper spawns Claude again with `--resume <claude-session-id>`
+6. User is now in the other agent's session (Klaude keeps its own session IDs for internal bookkeeping)
 
 This enables seamless multi-agent context switching without data loss.
+
+## Hook Integration
+
+Klaude ships a `hook` subcommand so Claude Code can keep the session database up to date when the TUI starts, clears, or ends conversations. Install the hooks in your Claude settings (e.g. `~/.claude/settings.json`):
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "klaude hook session-start" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "klaude hook session-end" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+With these hooks enabled, Klaude automatically records brand-new Claude sessions (including those created via `/clear`) and marks them completed when they end. This keeps parent/child relationships intact so `klaude checkout` and agent cleanup work reliably.
 
 ## Planned Features
 - Proper agent subprocess spawning (currently DB skeleton)

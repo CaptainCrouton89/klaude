@@ -7,6 +7,7 @@
 
 import { checkoutCommand, type CheckoutCommandData } from '@/commands/checkout.js';
 import { startCommand } from '@/commands/start.js';
+import { hookCommand } from '@/commands/hook.js';
 import { closeDatabase, initializeDatabase } from '@/db/database.js';
 import { createSessionManager } from '@/db/session-manager.js';
 import { createAgentManager } from '@/services/agent-manager.js';
@@ -44,6 +45,18 @@ async function initializeContext(): Promise<CLIContext> {
     logger,
     messageQueue,
   };
+}
+
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    return '';
+  }
+
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : chunk);
+  }
+  return Buffer.concat(chunks).toString('utf-8');
 }
 
 /**
@@ -105,7 +118,13 @@ async function main(): Promise<void> {
           if (result.data && typeof result.data === 'object' && 'sessionIds' in result.data) {
             const sessionIds = (result.data as Record<string, unknown>).sessionIds;
             if (Array.isArray(sessionIds)) {
-              console.log(chalk.gray(`Session IDs: ${sessionIds.join(', ')}`));
+              console.log(chalk.gray(`Klaude session IDs: ${sessionIds.join(', ')}`));
+            }
+          }
+          if (result.data && typeof result.data === 'object' && 'claudeSessionIds' in result.data) {
+            const claudeSessionIds = (result.data as Record<string, unknown>).claudeSessionIds;
+            if (Array.isArray(claudeSessionIds) && claudeSessionIds.length > 0) {
+              console.log(chalk.gray(`Claude session IDs: ${claudeSessionIds.join(', ')}`));
             }
           }
         } else {
@@ -133,6 +152,9 @@ async function main(): Promise<void> {
             if (session) {
               console.log(chalk.gray(`Agent: ${session.agentType}`));
               console.log(chalk.gray(`Status: ${session.status}`));
+              if (session.claudeSessionId) {
+                console.log(chalk.gray(`Claude session: ${session.claudeSessionId}`));
+              }
               console.log(chalk.gray(`Prompt: ${session.promptPreview}`));
             }
             if (switchInfo) {
@@ -187,6 +209,11 @@ async function main(): Promise<void> {
 
           const agentInfo = activePids[agentId];
           const targetSessionId = agentInfo.sessionId as string;
+          const klaudeSession = await context.sessionManager.getSession(targetSessionId);
+          if (klaudeSession) {
+            await context.sessionManager.activateSession(klaudeSession.id);
+          }
+          const resumeSessionId = klaudeSession?.claudeSessionId ?? (agentInfo.claudeSessionId as string | undefined) ?? targetSessionId;
           const parentPidRaw = agentInfo.parentPid;
           const parentPid =
             typeof parentPidRaw === 'number'
@@ -195,10 +222,10 @@ async function main(): Promise<void> {
               ? parseInt(parentPidRaw, 10)
               : undefined;
 
-          console.log(chalk.blue('↻'), `Switching to session ${targetSessionId}...`);
+          console.log(chalk.blue('↻'), `Switching to session ${resumeSessionId}...`);
 
           const killPid = typeof parentPid === 'number' && Number.isFinite(parentPid) ? parentPid : undefined;
-          const switchResult = await scheduleSessionSwitch(targetSessionId, {
+          const switchResult = await scheduleSessionSwitch(resumeSessionId, {
             killPids: killPid !== undefined ? [killPid] : undefined,
           });
 
@@ -215,6 +242,24 @@ async function main(): Promise<void> {
           process.exit(1);
         }
       }, 'enter-agent command');
+    });
+
+  program
+    .command('hook <event>')
+    .description('Process Claude Code hook payloads (internal use)')
+    .action(async (event: string) => {
+      await safeExecute(async () => {
+        const rawPayload = await readStdin();
+        const result = await hookCommand({ event, rawPayload }, context);
+        if (!result.success) {
+          const message = result.message ?? `Hook ${event} failed`;
+          console.error(chalk.red('✗'), message);
+          process.exitCode = 1;
+        } else if (process.env.KLAUDE_DEBUG) {
+          const message = result.message ?? `Hook ${event} processed`;
+          console.error(chalk.gray(message));
+        }
+      }, 'hook command');
     });
 
   try {

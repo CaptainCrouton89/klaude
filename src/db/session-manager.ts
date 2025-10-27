@@ -12,6 +12,7 @@ import { SESSION_ID_LENGTH } from '@/config/constants.js';
  */
 interface SessionRow {
   id: string;
+  claude_session_id: string | null;
   agent_type: string;
   parent_session_id: string | null;
   created_at: number;
@@ -30,6 +31,7 @@ function generateSessionId(): string {
 function rowToSession(row: SessionRow): Session {
   return {
     id: row.id,
+    claudeSessionId: row.claude_session_id || undefined,
     agentType: row.agent_type as AgentType,
     parentSessionId: row.parent_session_id || undefined,
     createdAt: new Date(row.created_at),
@@ -55,11 +57,11 @@ export class SessionManager implements ISessionManager {
     const now = Date.now();
 
     const stmt = db.prepare(`
-      INSERT INTO sessions (id, agent_type, parent_session_id, created_at, updated_at, status, prompt, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO sessions (id, claude_session_id, agent_type, parent_session_id, created_at, updated_at, status, prompt, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    stmt.run(sessionId, agentType, parentSessionId || null, now, now, 'created', prompt, '{}');
+    stmt.run(sessionId, null, agentType, parentSessionId || null, now, now, 'created', prompt, '{}');
 
     const session = await this.getSession(sessionId);
     if (!session) {
@@ -81,6 +83,17 @@ export class SessionManager implements ISessionManager {
   }
 
   /**
+   * Retrieve a session by Claude session ID
+   */
+  async getSessionByClaudeId(claudeSessionId: string): Promise<Session | null> {
+    const db = getDatabase();
+    const stmt = db.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
+    const row = stmt.get(claudeSessionId) as SessionRow | undefined;
+
+    return row ? rowToSession(row) : null;
+  }
+
+  /**
    * Update session properties
    */
   async updateSession(sessionId: string, updates: Partial<Session>): Promise<void> {
@@ -93,6 +106,14 @@ export class SessionManager implements ISessionManager {
     if (updates.status !== undefined) {
       updateFields.push('status = ?');
       values.push(updates.status);
+    }
+    if (updates.claudeSessionId !== undefined) {
+      updateFields.push('claude_session_id = ?');
+      values.push(updates.claudeSessionId);
+    }
+    if (updates.parentSessionId !== undefined) {
+      updateFields.push('parent_session_id = ?');
+      values.push(updates.parentSessionId ?? null);
     }
     if (updates.result !== undefined) {
       updateFields.push('result = ?');
@@ -153,8 +174,12 @@ export class SessionManager implements ISessionManager {
       query += ' AND parent_session_id = ?';
       values.push(filter.parentSessionId);
     }
+    if (filter?.claudeSessionId) {
+      query += ' AND claude_session_id = ?';
+      values.push(filter.claudeSessionId);
+    }
 
-    query += ' ORDER BY created_at DESC';
+    query += ' ORDER BY updated_at DESC';
 
     const stmt = db.prepare(query);
     const rows = stmt.all(...values) as SessionRow[];
