@@ -5,9 +5,9 @@
  * Entry point for the klaude command
  */
 
-import { startCommand } from '@/commands/start.js';
 import { checkoutCommand } from '@/commands/checkout.js';
-import { initializeDatabase, closeDatabase } from '@/db/database.js';
+import { startCommand } from '@/commands/start.js';
+import { closeDatabase, initializeDatabase } from '@/db/database.js';
 import { createSessionManager } from '@/db/session-manager.js';
 import { createAgentManager } from '@/services/agent-manager.js';
 import { loadConfig } from '@/services/config-loader.js';
@@ -15,11 +15,12 @@ import { createLogger } from '@/services/logger.js';
 import { createMessageQueue } from '@/services/message-queue.js';
 import { CLIContext } from '@/types/index.js';
 import { safeExecute } from '@/utils/error-handler.js';
+import { getKlaudeHome } from '@/utils/path-helper.js';
+import { runWrapper } from '@/wrapper.js';
 import chalk from 'chalk';
 import { Command } from 'commander';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { getKlaudeHome } from '@/utils/path-helper.js';
 
 /**
  * Initialize CLI context with all services
@@ -32,7 +33,7 @@ async function initializeContext(): Promise<CLIContext> {
   const config = await loadConfig();
   const sessionManager = createSessionManager();
   const logger = createLogger();
-  const agentManager = createAgentManager(sessionManager, logger);
+  const agentManager = createAgentManager(sessionManager, logger, config);
   const messageQueue = createMessageQueue();
 
   return {
@@ -48,6 +49,14 @@ async function initializeContext(): Promise<CLIContext> {
  * Main entry point
  */
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+
+  if (args.length === 0) {
+    const exitCode = await runWrapper();
+    process.exitCode = exitCode;
+    return;
+  }
+
   const program = new Command();
 
   program
@@ -215,6 +224,11 @@ async function main(): Promise<void> {
       program.outputHelp();
     }
   } finally {
+    try {
+      context.messageQueue.shutdown();
+    } catch (error) {
+      console.error(chalk.yellow('Warning:'), `Failed to shutdown message queue: ${error instanceof Error ? error.message : String(error)}`);
+    }
     // Always close database on exit
     closeDatabase();
   }
