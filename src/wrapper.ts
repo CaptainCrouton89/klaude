@@ -21,10 +21,12 @@ export async function runWrapper(initialArgs: string[] = []): Promise<number> {
   const klaudeHome = getKlaudeHome();
   const nextSessionFile = path.join(klaudeHome, '.next-session');
   const wrapperPidFile = path.join(klaudeHome, '.wrapper-pid');
+  const claudePidFile = path.join(klaudeHome, '.claude-pid');
   let currentArgs = [...initialArgs];
 
   await fs.mkdir(klaudeHome, { recursive: true });
   await writeWrapperPid(wrapperPidFile);
+  await removeFileIfExists(claudePidFile);
   await removeFileIfExists(nextSessionFile);
 
   const debugEnabled = Boolean(process.env.KLAUDE_DEBUG);
@@ -41,6 +43,7 @@ export async function runWrapper(initialArgs: string[] = []): Promise<number> {
         stdio: 'inherit',
         env: process.env,
       });
+      await writeClaudePid(claudePidFile, child.pid);
 
       const forwardedSignals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
       const signalHandler = (signal: NodeJS.Signals) => {
@@ -56,6 +59,7 @@ export async function runWrapper(initialArgs: string[] = []): Promise<number> {
         lastExitCode = await waitForChildExit(child);
       } finally {
         forwardedSignals.forEach(signal => process.off(signal, signalHandler));
+        await removeFileIfExists(claudePidFile);
       }
 
       await logDebug(debugEnabled, `Claude exited with code ${lastExitCode}`);
@@ -99,6 +103,14 @@ async function readNextSession(markerPath: string): Promise<string | null> {
 
 async function writeWrapperPid(pidFile: string): Promise<void> {
   await fs.writeFile(pidFile, `${process.pid}`, 'utf-8');
+}
+
+async function writeClaudePid(pidFile: string, pid: number | null | undefined): Promise<void> {
+  if (typeof pid !== 'number' || Number.isNaN(pid) || pid <= 0) {
+    await removeFileIfExists(pidFile);
+    return;
+  }
+  await fs.writeFile(pidFile, `${pid}`, 'utf-8');
 }
 
 async function removeFileIfExists(filePath: string): Promise<void> {

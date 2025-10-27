@@ -2,10 +2,22 @@
  * Checkout command - switch to a different session
  */
 
-import { CLIContext, CommandResult } from '@/types/index.js';
+import { AgentType, CLIContext, CommandResult, SessionStatus } from '@/types/index.js';
+import { scheduleSessionSwitch, SessionSwitchResult } from '@/utils/session-switcher.js';
 
 interface CheckoutCommandOptions {
   sessionId?: string;
+}
+
+export interface CheckoutCommandData {
+  session: {
+    id: string;
+    agentType: AgentType;
+    status: SessionStatus;
+    createdAt: Date;
+    promptPreview: string;
+  };
+  switch: SessionSwitchResult;
 }
 
 /**
@@ -51,20 +63,26 @@ export async function checkoutCommand(options: CheckoutCommandOptions, context: 
     // Log checkout
     await context.logger.log(targetSessionId, 'system', `Checked out to session ${targetSessionId}`);
 
-    // Get session info for display
-    const sessionMetadata = {
+    const switchResult = await scheduleSessionSwitch(targetSessionId);
+
+    const sessionMetadata: CheckoutCommandData['session'] = {
       id: targetSession.id,
       agentType: targetSession.agentType,
       status: targetSession.status,
       createdAt: targetSession.createdAt,
-      prompt: targetSession.prompt.substring(0, 100),
+      promptPreview: targetSession.prompt.substring(0, 100),
+    };
+
+    const data: CheckoutCommandData = {
+      session: sessionMetadata,
+      switch: switchResult,
     };
 
     return {
       success: true,
-      message: `Checked out to session: ${targetSessionId}`,
+      message: `Switching to session: ${targetSessionId}`,
       sessionId: targetSessionId,
-      data: sessionMetadata,
+      data,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

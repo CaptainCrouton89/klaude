@@ -5,7 +5,7 @@
  * Entry point for the klaude command
  */
 
-import { checkoutCommand } from '@/commands/checkout.js';
+import { checkoutCommand, type CheckoutCommandData } from '@/commands/checkout.js';
 import { startCommand } from '@/commands/start.js';
 import { closeDatabase, initializeDatabase } from '@/db/database.js';
 import { createSessionManager } from '@/db/session-manager.js';
@@ -17,6 +17,7 @@ import { CLIContext } from '@/types/index.js';
 import { safeExecute } from '@/utils/error-handler.js';
 import { getKlaudeHome } from '@/utils/path-helper.js';
 import { runWrapper } from '@/wrapper.js';
+import { scheduleSessionSwitch } from '@/utils/session-switcher.js';
 import chalk from 'chalk';
 import { Command } from 'commander';
 import { promises as fs } from 'fs';
@@ -128,10 +129,19 @@ async function main(): Promise<void> {
         if (result.success) {
           console.log(chalk.green('✓'), result.message);
           if (result.data && typeof result.data === 'object') {
-            const sessionData = result.data as Record<string, unknown>;
-            console.log(chalk.gray(`Agent: ${sessionData.agentType}`));
-            console.log(chalk.gray(`Status: ${sessionData.status}`));
-            console.log(chalk.gray(`Prompt: ${sessionData.prompt}`));
+            const { session, switch: switchInfo } = result.data as CheckoutCommandData;
+            if (session) {
+              console.log(chalk.gray(`Agent: ${session.agentType}`));
+              console.log(chalk.gray(`Status: ${session.status}`));
+              console.log(chalk.gray(`Prompt: ${session.promptPreview}`));
+            }
+            if (switchInfo) {
+              if (switchInfo.killError) {
+                console.error(chalk.yellow('Warning:'), `Failed to signal Claude process: ${switchInfo.killError}`);
+              } else if (!switchInfo.killAttempted) {
+                console.log(chalk.yellow('Note:'), 'No active Claude process detected; resume manually if needed.');
+              }
+            }
           }
         } else {
           console.error(chalk.red('✗'), result.message);
@@ -150,15 +160,11 @@ async function main(): Promise<void> {
     .description('Seamlessly switch to a different agent session (called from within Claude)')
     .action(async (agentId: string) => {
       await safeExecute(async () => {
-        // Get current process PID for tracking
-        const currentPid = process.pid;
-
         // Get klaude home directory
         const klaudeHome = getKlaudeHome();
 
         // File paths for session switching mechanism
         const activePidsFile = path.join(klaudeHome, '.active-pids.json');
-        const nextSessionFile = path.join(klaudeHome, '.next-session');
 
         try {
           // Read the active PIDs registry to find the target session
@@ -181,29 +187,25 @@ async function main(): Promise<void> {
 
           const agentInfo = activePids[agentId];
           const targetSessionId = agentInfo.sessionId as string;
-          const parentPid = agentInfo.parentPid as number;
-
-          // Write the marker file so the wrapper knows which session to resume
-          // Use synchronous write to guarantee it's written before we kill the process
-          await fs.writeFile(nextSessionFile, targetSessionId, 'utf-8');
+          const parentPidRaw = agentInfo.parentPid;
+          const parentPid =
+            typeof parentPidRaw === 'number'
+              ? parentPidRaw
+              : typeof parentPidRaw === 'string'
+              ? parseInt(parentPidRaw, 10)
+              : undefined;
 
           console.log(chalk.blue('↻'), `Switching to session ${targetSessionId}...`);
 
-          // Small delay to ensure marker file is written
-          await new Promise(resolve => setTimeout(resolve, 200));
+          const killPid = typeof parentPid === 'number' && Number.isFinite(parentPid) ? parentPid : undefined;
+          const switchResult = await scheduleSessionSwitch(targetSessionId, {
+            killPids: killPid !== undefined ? [killPid] : undefined,
+          });
 
-          // Kill the parent Claude process with SIGTERM (graceful)
-          // This signals the wrapper to check for the marker file
-          try {
-            process.kill(parentPid, 'SIGTERM');
-          } catch (err) {
-            const nodeErr = err as NodeJS.ErrnoException;
-            // ESRCH means the process is already dead, which is acceptable
-            if (nodeErr.code !== 'ESRCH') {
-              throw err;
-            }
-            // Log that parent was already terminated (expected in some scenarios)
-            // Continue with exit below
+          if (switchResult.killError) {
+            console.error(chalk.yellow('Warning:'), `Failed to signal Claude process: ${switchResult.killError}`);
+          } else if (!switchResult.killAttempted) {
+            console.log(chalk.yellow('Note:'), 'No active Claude process detected; resume manually if needed.');
           }
 
           // Exit cleanly so Claude sees a successful exit
