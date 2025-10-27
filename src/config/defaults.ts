@@ -16,5 +16,10 @@ export const DEFAULT_CONFIG: KlaudeConfig = {
   wrapper: {
     claudeBinary:
       "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+    socketDir: "~/.klaude/run",
+    projectsDir: "~/.klaude/projects",
+    switch: {
+      graceSeconds: 1,
+    },
   },
 };

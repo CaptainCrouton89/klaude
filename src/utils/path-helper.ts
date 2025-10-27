@@ -3,17 +3,23 @@
  */
 
 import { homedir } from 'os';
-import { join } from 'path';
-import { KLAUDE_HOME, KLAUDE_DB_PATH, KLAUDE_LOGS_DIR, KLAUDE_CONFIG_FILE } from '@/config/constants.js';
+import path from 'path';
+import {
+  KLAUDE_HOME,
+  KLAUDE_DB_PATH,
+  KLAUDE_RUN_DIR,
+  KLAUDE_PROJECTS_DIR,
+  KLAUDE_CONFIG_FILE,
+} from '@/config/constants.js';
 
 /**
  * Expand ~ to user home directory
  */
-export function expandHome(path: string): string {
-  if (path.startsWith('~')) {
-    return join(homedir(), path.slice(1));
+export function expandHome(targetPath: string): string {
+  if (targetPath.startsWith('~')) {
+    return path.join(homedir(), targetPath.slice(1));
   }
-  return path;
+  return targetPath;
 }
 
 /**
@@ -31,13 +37,6 @@ export function getDbPath(): string {
 }
 
 /**
- * Get logs directory path (expanded)
- */
-export function getLogsDir(): string {
-  return expandHome(KLAUDE_LOGS_DIR);
-}
-
-/**
  * Get config file path (expanded)
  */
 export function getConfigFilePath(): string {
@@ -45,8 +44,68 @@ export function getConfigFilePath(): string {
 }
 
 /**
- * Get session log file path
+ * Get global run directory root (expanded)
  */
-export function getSessionLogPath(sessionId: string): string {
-  return join(getLogsDir(), `session-${sessionId}.log`);
+export function getRunRoot(rootOverride?: string): string {
+  return expandHome(rootOverride ?? KLAUDE_RUN_DIR);
+}
+
+/**
+ * Get global projects directory root (expanded)
+ */
+export function getProjectsRoot(rootOverride?: string): string {
+  return expandHome(rootOverride ?? KLAUDE_PROJECTS_DIR);
+}
+
+/**
+ * Get per-project directory under ~/.klaude/projects/<hash>
+ */
+export function getProjectDirectory(projectHash: string, rootOverride?: string): string {
+  return path.join(getProjectsRoot(rootOverride), projectHash);
+}
+
+/**
+ * Get per-project logs directory
+ */
+export function getProjectLogsDirectory(projectHash: string, rootOverride?: string): string {
+  return path.join(getProjectDirectory(projectHash, rootOverride), 'logs');
+}
+
+/**
+ * Get per-project run directory (sockets, registry)
+ */
+export function getProjectRunDirectory(projectHash: string, rootOverride?: string): string {
+  return path.join(getRunRoot(rootOverride), projectHash);
+}
+
+/**
+ * Get per-instance socket path
+ */
+export function getInstanceSocketPath(
+  projectHash: string,
+  instanceId: string,
+  runRootOverride?: string
+): string {
+  return path.join(getProjectRunDirectory(projectHash, runRootOverride), `${instanceId}.sock`);
+}
+
+/**
+ * Get per-project instance registry path
+ */
+export function getInstanceRegistryPath(projectHash: string, runRootOverride?: string): string {
+  return path.join(getProjectRunDirectory(projectHash, runRootOverride), 'instances.json');
+}
+
+/**
+ * Get per-session log file path
+ */
+export function getSessionLogPath(
+  projectHash: string,
+  sessionId: string,
+  projectsRootOverride?: string
+): string {
+  return path.join(
+    getProjectLogsDirectory(projectHash, projectsRootOverride),
+    `session-${sessionId}.log`
+  );
 }

@@ -70,7 +70,8 @@ export async function initializeDirectory(): Promise<void> {
 
   const directories = [
     klaudeHome,
-    path.join(klaudeHome, 'logs'),
+    path.join(klaudeHome, 'run'),
+    path.join(klaudeHome, 'projects'),
     path.join(klaudeHome, 'cache'),
   ];
 
@@ -102,9 +103,22 @@ function mergeConfig(defaults: KlaudeConfig, partial: Partial<KlaudeConfig>): Kl
     Object.assign(serverConfig, partial.server);
   }
 
-  const wrapperConfig = { ...(defaults.wrapper ?? {}) };
+  const wrapperDefaults = defaults.wrapper ?? {};
+  const wrapperConfig = {
+    ...wrapperDefaults,
+    switch: wrapperDefaults?.switch ? { ...wrapperDefaults.switch } : undefined,
+  } as KlaudeConfig['wrapper'];
+
   if (partial.wrapper) {
-    Object.assign(wrapperConfig, partial.wrapper);
+    const { switch: partialSwitch, ...restWrapper } = partial.wrapper;
+    Object.assign(wrapperConfig!, restWrapper);
+
+    if (partialSwitch) {
+      wrapperConfig!.switch = {
+        ...(wrapperConfig!.switch ?? {}),
+        ...partialSwitch,
+      };
+    }
   }
 
   return {

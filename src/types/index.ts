@@ -13,6 +13,11 @@ export interface KlaudeConfig {
   };
   wrapper?: {
     claudeBinary?: string;
+    socketDir?: string;
+    projectsDir?: string;
+    switch?: {
+      graceSeconds?: number;
+    };
   };
 }
 
@@ -33,3 +38,6 @@ export interface QueryResult<T> {
   count: number;
   error?: string;
 }
+
+// Export all database entity types
+export * from './db.js';

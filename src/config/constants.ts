@@ -4,7 +4,8 @@
 
 export const KLAUDE_HOME = '~/.klaude';
 export const KLAUDE_DB_PATH = `${KLAUDE_HOME}/sessions.db`;
-export const KLAUDE_LOGS_DIR = `${KLAUDE_HOME}/logs`;
+export const KLAUDE_RUN_DIR = `${KLAUDE_HOME}/run`;
+export const KLAUDE_PROJECTS_DIR = `${KLAUDE_HOME}/projects`;
 export const KLAUDE_CONFIG_FILE = `${KLAUDE_HOME}/config.yaml`;
 
 // Timeouts (milliseconds)

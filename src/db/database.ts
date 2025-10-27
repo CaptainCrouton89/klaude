@@ -221,5 +221,108 @@ export function closeDatabase(): void {
  * Create database schema
  */
 function initializeSchema(db: Database): void {
-  throw new Error('Not implemented');
+  try {
+    // Set WAL mode and synchronous mode for better concurrency
+    db.run('PRAGMA journal_mode = WAL;');
+    db.run('PRAGMA synchronous = NORMAL;');
+
+    // Create projects table
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY,
+        root_path TEXT NOT NULL UNIQUE,
+        project_hash TEXT NOT NULL UNIQUE,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create instances table
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS instances (
+        instance_id TEXT PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        pid INTEGER NOT NULL,
+        tty TEXT,
+        started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        ended_at DATETIME,
+        exit_code INTEGER,
+        metadata_json TEXT
+      );
+    `);
+
+    db.run('CREATE INDEX IF NOT EXISTS idx_instances_project ON instances(project_id);');
+
+    // Create sessions table
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        parent_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+        agent_type TEXT NOT NULL,
+        instance_id TEXT REFERENCES instances(instance_id) ON DELETE SET NULL,
+        title TEXT,
+        prompt TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME,
+        ended_at DATETIME,
+        last_claude_session_id TEXT,
+        last_transcript_path TEXT,
+        current_process_pid INTEGER,
+        metadata_json TEXT
+      );
+    `);
+
+    db.run('CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_id);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_sessions_instance ON sessions(instance_id);');
+
+    // Create claude_session_links table
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS claude_session_links (
+        id INTEGER PRIMARY KEY,
+        klaude_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        claude_session_id TEXT NOT NULL UNIQUE,
+        transcript_path TEXT,
+        source TEXT,
+        started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        ended_at DATETIME
+      );
+    `);
+
+    db.run('CREATE INDEX IF NOT EXISTS idx_csl_klaude ON claude_session_links(klaude_session_id);');
+
+    // Create runtime_process table
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS runtime_process (
+        id INTEGER PRIMARY KEY,
+        klaude_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        pid INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        exited_at DATETIME,
+        exit_code INTEGER,
+        is_current INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+
+    db.run('CREATE INDEX IF NOT EXISTS idx_runtime_klaude ON runtime_process(klaude_session_id);');
+
+    // Create events table
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+        klaude_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        payload_json TEXT,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    db.run('CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);');
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to initialize database schema: ${errorMessage}`);
+  }
 }
