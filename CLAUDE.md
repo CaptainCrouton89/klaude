@@ -9,150 +9,93 @@ Klaude is a TypeScript CLI wrapper for Claude Code that enables multi-agent sess
 ## Build & Development Commands
 
 ```bash
-# Build the TypeScript project (tsc + path alias resolution)
-npm run build
-
-# Watch mode for development
-npm run dev
-
-# Run the CLI
-npm start
-
-# Format code with Prettier
-npm run format
-
-# Lint with ESLint
-npm run lint
-
-# Run tests with Vitest
-npm test
-
-# Generate test coverage
-npm run test:coverage
-
-# Clean build artifacts
-npm run clean
+npm run build       # Build the TypeScript project
+npm run dev         # Watch mode for development
+npm start           # Run the CLI
+npm run format      # Format code with Prettier
+npm run lint        # Lint with ESLint
+npm test            # Run tests with Vitest
+npm run clean       # Clean build artifacts
 ```
 
 ## Project Structure
 
-### Core Directories
+**`src/types/index.ts`** — Central type definitions
+- `Session`, `Agent`, `Message` interfaces for core domain model
+- Service managers: `ISessionManager`, `IAgentManager`, `IMessageQueue`, `ILogger`
+- `CLIContext` (runtime context), `KlaudeConfig` (configuration from `~/.klaude/config.yaml`)
 
-**`src/types/`**
-- `index.ts`: Central type definitions for all core interfaces
-  - `Session`: Represents a unique agent execution context with status lifecycle
-  - `Agent`: Active agent instance with abort control and timing
-  - `Message`: Inter-agent communication messages
-  - Service manager interfaces: `ISessionManager`, `IAgentManager`, `IMessageQueue`, `ILogger`
-  - `CLIContext`: Runtime context passed through command handlers
-  - `KlaudeConfig`: Configuration structure from `~/.klaude/config.yaml`
+**`src/config/`** — Application-wide constants and defaults
+- `constants.ts`: Paths, timeouts (`DEFAULT_AGENT_TIMEOUT` 10 min), agent types, session limits (10 concurrent)
+- `defaults.ts`: Default configuration merged with user config
 
-**`src/config/`**
-- `constants.ts`: Application-wide constants and magic values
-  - Paths: `KLAUDE_HOME` (`~/.klaude`), `KLAUDE_DB_PATH`, `KLAUDE_LOGS_DIR`, `KLAUDE_CONFIG_FILE`
-  - Timeouts: `DEFAULT_AGENT_TIMEOUT` (10 min), `MESSAGE_WAIT_TIMEOUT` (30 sec)
-  - Session management: `MAX_CONCURRENT_AGENTS` (10), `SESSION_ID_LENGTH` (12), `LOG_RETENTION_DAYS` (30)
-  - Valid agent types enumerated (orchestrator, planner, programmer, junior-engineer, context-engineer, senior-engineer, library-docs-writer, non-dev)
-- `defaults.ts`: Default configuration values (`DEFAULT_CONFIG`) including SDK model, session settings, and optional server config
+**`src/db/database.ts`** — SQLite database at `~/.klaude/sessions.db`
+- Three tables: `sessions`, `messages`, `active_agents` with indexes and foreign keys
+- Uses `sql.js` for in-memory SQLite with file persistence and WAL mode
 
-**`src/db/`**
-- `database.ts`: SQLite database initialization and connection management
-  - Three main tables: `sessions`, `messages`, `active_agents`
-  - Indexes on common query patterns (agent_type, status, created_at, session references)
-  - Foreign key constraints and WAL mode enabled for reliability
-  - Uses `sql.js` for in-memory SQLite with file persistence
-
-**`src/utils/`**
-- `path-helper.ts`: Path expansion and Klaude home directory management
-  - `expandHome()`: Converts `~` to user home directory
-  - Path getters for db, logs, config, and session log files
-- `error-handler.ts`: Custom error types and safe execution wrappers
-  - `KlaudeError` base class with error codes
-  - Specific errors: `SessionNotFoundError`, `AgentNotFoundError`, `DatabaseError`, `ConfigError`, `ValidationError`
-  - `safeExecute()`: Exhaustively handles KlaudeError, Error, and unknown types
-  - `requireArg()`: Validates required arguments
+**`src/utils/`** — Helper utilities
+- `path-helper.ts`: Path expansion, `KLAUDE_HOME` management
+- `error-handler.ts`: `KlaudeError` base class, specific error types, `safeExecute()` wrapper
 
 ## Architecture Patterns
 
-### Wrapper Loop Architecture
+### Wrapper Loop
 
-Klaude is fundamentally a process wrapper with session switching capabilities:
-1. **Wrapper spawns Claude Code** as a child process with stdio inherited (full terminal interaction)
-2. **User commands inside Claude** (e.g., `enter-agent`) write marker files and signal the wrapper
-3. **Wrapper detects exit + marker file** and respawns Claude with new session context
-4. **No session history lost** — all sessions backed by SQLite at `~/.klaude/sessions.db`
+Klaude spawns Claude Code as a subprocess with session switching:
+1. Wrapper spawns Claude Code with stdio inherited
+2. User commands inside Claude (e.g., `enter-agent`) write marker files
+3. Wrapper detects exit + marker file and respawns Claude with new session context
+4. All sessions backed by SQLite — no history lost
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed session switching mechanism, bash reference implementation, and TypeScript re-implementation requirements.
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed session switching mechanism.
 
 ### Session Model
 
-Sessions represent isolated execution contexts for agents. Each session:
-- Has a unique ID, agent type, and lifecycle status (created → running → completed/failed)
-- Can have a parent session (for hierarchical agent spawning)
-- Stores the initial prompt, result, and metadata
-- Persists timing metadata (createdAt, updatedAt, completedAt)
+Sessions represent isolated execution contexts for agents:
+- Unique ID, agent type, lifecycle status (created → running → completed/failed)
+- Optional parent session for hierarchical agent spawning
+- Stores prompt, result, and timing metadata
 
 ### Service Manager Pattern
 
-The codebase defines service manager interfaces that abstract implementations:
-- `ISessionManager`: CRUD and lifecycle operations on sessions
-- `IAgentManager`: Spawn, interrupt, and track active agents
-- `IMessageQueue`: Inter-agent message passing with subscription support
-- `ILogger`: Session-based logging with streaming and flush operations
-
-These interfaces are passed through `CLIContext` to command handlers, enabling dependency injection and testability.
+Interfaces passed through `CLIContext` to command handlers (enables dependency injection):
+- `ISessionManager`: CRUD and lifecycle operations
+- `IAgentManager`: Spawn, interrupt, track active agents
+- `IMessageQueue`: Inter-agent message passing
+- `ILogger`: Session-based logging
 
 ### Configuration System
 
-Configuration is loaded from `~/.klaude/config.yaml` and merged with `DEFAULT_CONFIG` from `src/config/defaults.ts`. The `KlaudeConfig` interface supports:
+Configuration loaded from `~/.klaude/config.yaml` and merged with defaults. Supports:
 - SDK settings: model selection, thinking tokens, permission mode, fallback model
 - Session settings: auto-save interval, log retention, concurrent agent limits
 - Optional server settings: enable/disable, port
 
 ### Database Schema
 
-Uses `sql.js` (in-memory SQLite with file persistence) stored at `~/.klaude/sessions.db`.
-
-**sessions table**
-- `id` (TEXT, PRIMARY KEY)
-- `agent_type`, `status`, `prompt`, `result`, `metadata`
-- `created_at`, `updated_at`, `completed_at` (INTEGER timestamps)
-- `parent_session_id` (foreign key for hierarchies)
-
-**messages table**
-- `id`, `from_session_id`, `to_session_id` (foreign keys)
-- `content`, `created_at`, `read_at`
-
-**active_agents table**
-- `session_id` (PRIMARY KEY, foreign key)
-- `type`, `status`, `started_at`, `completed_at`
+**sessions table**: `id`, `agent_type`, `status`, `prompt`, `result`, `metadata`, timestamps, `parent_session_id`
+**messages table**: `id`, `from_session_id`, `to_session_id`, `content`, timestamps, `read_at`
+**active_agents table**: `session_id`, `type`, `status`, `started_at`, `completed_at`
 
 ## Development Notes
 
-- **TypeScript Strict Mode**: Enabled with `noImplicitAny`, `strictNullChecks`, `strictFunctionTypes`. No `any` types without explicit reason.
-- **Path Resolution**: Uses `@/*` alias (configured in `tsconfig.json` baseUrl/paths) for clean imports
-- **Database**: Uses `sql.js` for SQLite; singleton instance from `initializeDatabase()` or `getDatabase()`. Schema initialization is automatic.
-- **Error Handling**: Use `safeExecute()` for async operations to ensure explicit error handling. All caught errors result in a throw.
-- **Log Retention**: Sessions older than `LOG_RETENTION_DAYS` (default 30) should be archived/cleaned periodically.
-
-## File Organization
-
-- **Entry point**: `dist/index.js` (compiled from TypeScript)
-- **npm bin**: Registered as `klaude` command
-- **Compiled output**: `dist/` directory (generated from `src/` via TypeScript compilation)
-- **No test files yet**: `vitest` is configured but no `.test.ts` files exist in the project
+- **TypeScript Strict Mode**: Enabled (`noImplicitAny`, `strictNullChecks`, `strictFunctionTypes`). No `any` types without explicit reason.
+- **Path Aliases**: Uses `@/*` alias (configured in `tsconfig.json`) for clean imports
+- **Database**: Use `initializeDatabase()` or `getDatabase()` for singleton SQLite instance
+- **Error Handling**: Use `safeExecute()` wrapper for async operations — all errors are caught and thrown
+- **Log Retention**: Sessions older than `LOG_RETENTION_DAYS` (default 30) should be archived/cleaned
 
 ## Key Dependencies
 
-- **@anthropic-ai/claude-agent-sdk**: Core agent execution
-- **sql.js**: In-memory SQLite with file persistence
-- **commander**: CLI argument parsing
-- **js-yaml**: YAML config parsing
-- **chalk**: Terminal styling
-- **table**: Formatted table output for CLI commands
+- `@anthropic-ai/claude-agent-sdk`: Core agent execution
+- `sql.js`: In-memory SQLite with file persistence
+- `commander`: CLI argument parsing
+- `js-yaml`: YAML configuration
+- `chalk`: Terminal styling
+- `table`: Formatted table output
 
 ## Related Documentation
 
-- **[README.md](./README.md)** — User-facing overview, quick start, and command reference
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Detailed session switching mechanism and implementation requirements
-- **[AGENTS.md](./AGENTS.md)** — Agent types and their roles in the orchestration system
+- **[README.md](./README.md)** — User-facing overview and command reference
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Session switching mechanism and implementation details
+- **[AGENTS.md](./AGENTS.md)** — Agent types and roles
