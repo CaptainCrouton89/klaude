@@ -5,6 +5,7 @@
 export type SessionStatus = 'created' | 'running' | 'completed' | 'failed';
 export type AgentStatus = 'idle' | 'running' | 'interrupted' | 'completed' | 'failed';
 export type AgentType = 'orchestrator' | 'planner' | 'programmer' | 'junior-engineer' | 'context-engineer' | 'senior-engineer' | 'library-docs-writer' | 'non-dev';
+export type LogEntryType = 'assistant' | 'user' | 'tool_use' | 'system' | 'error';
 
 /**
  * Session represents a unique agent execution context
@@ -73,10 +74,11 @@ export interface IMessageQueue {
   dequeue(sessionId: string): Promise<Message[]>;
   subscribe(sessionId: string, callback: (message: Message) => void): void;
   ack(messageId: string): Promise<void>;
+  shutdown(): void;
 }
 
 export interface ILogger {
-  log(sessionId: string, type: LogEntry['type'], content: string): Promise<void>;
+  log(sessionId: string, type: LogEntryType, content: string): Promise<void>;
   stream(sessionId: string): Promise<LogEntry[]>;
   flush(sessionId: string): Promise<void>;
 }
@@ -112,6 +114,9 @@ export interface KlaudeConfig {
     enabled: boolean;
     port: number;
   };
+  wrapper?: {
+    claudeBinary?: string;
+  };
 }
 
 /**
@@ -141,6 +146,9 @@ export interface StartAgentOptions {
   share?: boolean;
   detach?: boolean;
   count?: number;
+  onStream?: (message: AgentStreamMessage) => void;
+  onComplete?: (payload: { sessionId: string; result: string }) => void;
+  onError?: (error: Error) => void;
 }
 
 /**
@@ -158,8 +166,14 @@ export interface ReadSessionOptions {
 export interface LogEntry {
   timestamp: Date;
   sessionId: string;
-  type: 'assistant' | 'user' | 'tool_use' | 'system' | 'error';
+  type: LogEntryType;
   content: string;
+}
+
+export interface AgentStreamMessage {
+  type: LogEntryType;
+  content: string;
+  partial?: boolean;
 }
 
 /**

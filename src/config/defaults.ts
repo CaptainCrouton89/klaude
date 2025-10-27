@@ -19,4 +19,7 @@ export const DEFAULT_CONFIG: KlaudeConfig = {
     enabled: false,
     port: 8000,
   },
+  wrapper: {
+    claudeBinary: '/opt/homebrew/bin/claude',
+  },
 };

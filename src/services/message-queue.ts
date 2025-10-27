@@ -161,6 +161,13 @@ export class MessageQueue implements IMessageQueue {
   }
 
   /**
+   * Shutdown the message queue and release resources
+   */
+  shutdown(): void {
+    this.stopPolling();
+  }
+
+  /**
    * Get all unread message count for a session
    */
   async getUnreadCount(sessionId: string): Promise<number> {

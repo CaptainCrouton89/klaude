@@ -103,15 +103,21 @@ function mergeConfig(defaults: KlaudeConfig, partial: Partial<KlaudeConfig>): Kl
     Object.assign(sessionConfig, partial.session);
   }
 
-  const serverConfig = { ...defaults.server };
+  const serverConfig = { ...(defaults.server ?? {}) };
   if (partial.server) {
     Object.assign(serverConfig, partial.server);
+  }
+
+  const wrapperConfig = { ...(defaults.wrapper ?? {}) };
+  if (partial.wrapper) {
+    Object.assign(wrapperConfig, partial.wrapper);
   }
 
   return {
     sdk: sdkConfig as KlaudeConfig['sdk'],
     session: sessionConfig as KlaudeConfig['session'],
     server: serverConfig as KlaudeConfig['server'],
+    wrapper: wrapperConfig as KlaudeConfig['wrapper'],
   };
 }
 

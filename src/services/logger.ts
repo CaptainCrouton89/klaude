@@ -2,7 +2,7 @@
  * File-based session logger
  */
 
-import { ILogger, LogEntry } from '@/types/index.js';
+import { ILogger, LogEntry, LogEntryType } from '@/types/index.js';
 import { getLogsDir, getSessionLogPath } from '@/utils/path-helper.js';
 import { promises as fs } from 'fs';
 import { existsSync, mkdirSync } from 'fs';
@@ -27,7 +27,7 @@ export class FileLogger implements ILogger {
   /**
    * Log an entry for a session
    */
-  async log(sessionId: string, type: LogEntry['type'], content: string): Promise<void> {
+  async log(sessionId: string, type: LogEntryType, content: string): Promise<void> {
     const entry: LogEntry = {
       timestamp: new Date(),
       sessionId,
