@@ -7,7 +7,7 @@
 
 import { startCommand } from '@/commands/start.js';
 import { checkoutCommand } from '@/commands/checkout.js';
-import { initializeDatabase } from '@/db/database.js';
+import { initializeDatabase, closeDatabase } from '@/db/database.js';
 import { createSessionManager } from '@/db/session-manager.js';
 import { createAgentManager } from '@/services/agent-manager.js';
 import { loadConfig } from '@/services/config-loader.js';
@@ -206,12 +206,17 @@ async function main(): Promise<void> {
       }, 'enter-agent command');
     });
 
-  // Parse command line arguments
-  await program.parseAsync(process.argv);
+  try {
+    // Parse command line arguments
+    await program.parseAsync(process.argv);
 
-  // If no command was provided, show help
-  if (!process.argv.slice(2).length) {
-    program.outputHelp();
+    // If no command was provided, show help
+    if (!process.argv.slice(2).length) {
+      program.outputHelp();
+    }
+  } finally {
+    // Always close database on exit
+    closeDatabase();
   }
 }
 
