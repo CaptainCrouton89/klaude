@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Klaude is a TypeScript CLI wrapper for the Claude Agent SDK that enables multi-agent session management. It provides stateful agent orchestration where agents can be spawned, managed, and communicate with each other across isolated sessions, backed by SQLite persistence.
+Klaude is a TypeScript CLI wrapper for Claude Code that enables multi-agent session management. It spawns Claude Code as a subprocess and provides stateful agent orchestration where agents can be spawned, managed, and communicate with each other across isolated sessions, backed by SQLite persistence.
 
 ## Build & Development Commands
 
 ```bash
-# Build the TypeScript project
+# Build the TypeScript project (tsc + path alias resolution)
 npm run build
 
 # Watch mode for development
@@ -60,6 +60,7 @@ npm run clean
   - Three main tables: `sessions`, `messages`, `active_agents`
   - Indexes on common query patterns (agent_type, status, created_at, session references)
   - Foreign key constraints and WAL mode enabled for reliability
+  - Uses `sql.js` for in-memory SQLite with file persistence
 
 **`src/utils/`**
 - `path-helper.ts`: Path expansion and Klaude home directory management
@@ -72,6 +73,16 @@ npm run clean
   - `requireArg()`: Validates required arguments
 
 ## Architecture Patterns
+
+### Wrapper Loop Architecture
+
+Klaude is fundamentally a process wrapper with session switching capabilities:
+1. **Wrapper spawns Claude Code** as a child process with stdio inherited (full terminal interaction)
+2. **User commands inside Claude** (e.g., `enter-agent`) write marker files and signal the wrapper
+3. **Wrapper detects exit + marker file** and respawns Claude with new session context
+4. **No session history lost** — all sessions backed by SQLite at `~/.klaude/sessions.db`
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed session switching mechanism, bash reference implementation, and TypeScript re-implementation requirements.
 
 ### Session Model
 
@@ -100,6 +111,8 @@ Configuration is loaded from `~/.klaude/config.yaml` and merged with `DEFAULT_CO
 
 ### Database Schema
 
+Uses `sql.js` (in-memory SQLite with file persistence) stored at `~/.klaude/sessions.db`.
+
 **sessions table**
 - `id` (TEXT, PRIMARY KEY)
 - `agent_type`, `status`, `prompt`, `result`, `metadata`
@@ -118,7 +131,7 @@ Configuration is loaded from `~/.klaude/config.yaml` and merged with `DEFAULT_CO
 
 - **TypeScript Strict Mode**: Enabled with `noImplicitAny`, `strictNullChecks`, `strictFunctionTypes`. No `any` types without explicit reason.
 - **Path Resolution**: Uses `@/*` alias (configured in `tsconfig.json` baseUrl/paths) for clean imports
-- **Database Access**: Always use the singleton instance from `initializeDatabase()` or `getDatabase()`. Schema initialization is automatic.
+- **Database**: Uses `sql.js` for SQLite; singleton instance from `initializeDatabase()` or `getDatabase()`. Schema initialization is automatic.
 - **Error Handling**: Use `safeExecute()` for async operations to ensure explicit error handling. All caught errors result in a throw.
 - **Log Retention**: Sessions older than `LOG_RETENTION_DAYS` (default 30) should be archived/cleaned periodically.
 
@@ -132,8 +145,14 @@ Configuration is loaded from `~/.klaude/config.yaml` and merged with `DEFAULT_CO
 ## Key Dependencies
 
 - **@anthropic-ai/claude-agent-sdk**: Core agent execution
-- **better-sqlite3**: Persistent session/message storage
+- **sql.js**: In-memory SQLite with file persistence
 - **commander**: CLI argument parsing
 - **js-yaml**: YAML config parsing
 - **chalk**: Terminal styling
 - **table**: Formatted table output for CLI commands
+
+## Related Documentation
+
+- **[README.md](./README.md)** — User-facing overview, quick start, and command reference
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Detailed session switching mechanism and implementation requirements
+- **[AGENTS.md](./AGENTS.md)** — Agent types and their roles in the orchestration system
