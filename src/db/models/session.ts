@@ -1,187 +1,209 @@
-/**
- * Session model - CRUD operations for sessions table
- */
-
-import { getDatabase } from '../database.js';
 import type { Session } from '@/types/db.js';
+import { DatabaseError } from '@/utils/error-handler.js';
 import { generateULID } from '@/utils/ulid.js';
+import { getDatabase } from '../database.js';
 
-/**
- * Create a new session
- */
+type SessionStatus = Session['status'];
+
 export interface CreateSessionOptions {
-  instanceId?: string | null;
   parentId?: string | null;
+  instanceId?: string | null;
   title?: string | null;
   prompt?: string | null;
+  status?: SessionStatus;
   metadataJson?: string | null;
   sessionId?: string;
 }
 
+function mapRowToSession(row: unknown): Session {
+  if (!row || typeof row !== 'object') {
+    throw new DatabaseError('Invalid session row received from database');
+  }
+  const record = row as Record<string, unknown>;
+  return {
+    id: String(record.id),
+    project_id: Number(record.project_id),
+    parent_id: record.parent_id === null || record.parent_id === undefined ? null : String(record.parent_id),
+    agent_type: record.agent_type as Session['agent_type'],
+    instance_id:
+      record.instance_id === null || record.instance_id === undefined
+        ? null
+        : String(record.instance_id),
+    title: record.title === null || record.title === undefined ? null : String(record.title),
+    prompt: record.prompt === null || record.prompt === undefined ? null : String(record.prompt),
+    status: record.status as SessionStatus,
+    created_at: String(record.created_at),
+    updated_at: record.updated_at === null || record.updated_at === undefined ? null : String(record.updated_at),
+    ended_at: record.ended_at === null || record.ended_at === undefined ? null : String(record.ended_at),
+    last_claude_session_id:
+      record.last_claude_session_id === null || record.last_claude_session_id === undefined
+        ? null
+        : String(record.last_claude_session_id),
+    last_transcript_path:
+      record.last_transcript_path === null || record.last_transcript_path === undefined
+        ? null
+        : String(record.last_transcript_path),
+    current_process_pid:
+      record.current_process_pid === null || record.current_process_pid === undefined
+        ? null
+        : Number(record.current_process_pid),
+    metadata_json:
+      record.metadata_json === null || record.metadata_json === undefined
+        ? null
+        : String(record.metadata_json),
+  };
+}
+
+export function getSessionById(sessionId: string): Session | null {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `SELECT *
+       FROM sessions
+       WHERE id = ?`,
+    );
+    const row = stmt.get(sessionId);
+    return row ? mapRowToSession(row) : null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to fetch session by id: ${message}`);
+  }
+}
+
+export function listSessionsByProject(projectId: number): Session[] {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `SELECT *
+       FROM sessions
+       WHERE project_id = ?
+       ORDER BY created_at DESC`,
+    );
+    const rows = stmt.all(projectId) as unknown[];
+    return rows.map(mapRowToSession);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to list sessions for project: ${message}`);
+  }
+}
+
 export function createSession(
   projectId: number,
-  agentType: 'tui' | 'sdk' | 'worker',
+  agentType: Session['agent_type'],
   options: CreateSessionOptions = {},
 ): Session {
-  const db = getDatabase();
-  const {
-    instanceId = null,
-    parentId = null,
-    title = null,
-    prompt = null,
-    metadataJson = null,
-    sessionId,
-  } = options;
+  const sessionId = options.sessionId ?? generateULID();
+  const status = options.status ?? 'active';
 
-  const id = sessionId ?? generateULID();
+  try {
+    const db = getDatabase();
+    const insert = db.prepare(
+      `INSERT INTO sessions (
+        id,
+        project_id,
+        parent_id,
+        agent_type,
+        instance_id,
+        title,
+        prompt,
+        status,
+        metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run(
+      sessionId,
+      projectId,
+      options.parentId ?? null,
+      agentType,
+      options.instanceId ?? null,
+      options.title ?? null,
+      options.prompt ?? null,
+      status,
+      options.metadataJson ?? null,
+    );
 
-  const stmt = db.prepare(
-    'INSERT INTO sessions (id, project_id, agent_type, instance_id, parent_id, title, prompt, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  stmt.run(
-    id,
-    projectId,
-    agentType,
-    instanceId || null,
-    parentId || null,
-    title || null,
-    prompt || null,
-    metadataJson || null,
-  );
-
-  return getSessionById(id)!;
+    const stmt = db.prepare(
+      `SELECT *
+       FROM sessions
+       WHERE id = ?`,
+    );
+    const row = stmt.get(sessionId);
+    if (!row) {
+      throw new DatabaseError('Failed to retrieve newly created session');
+    }
+    return mapRowToSession(row);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to create session: ${message}`);
+  }
 }
 
-/**
- * Get session by ID
- */
-export function getSessionById(id: string): Session | null {
-  const db = getDatabase();
-  const stmt = db.prepare('SELECT * FROM sessions WHERE id = ?');
-  const result = stmt.get(id) as Session | null;
-  return result || null;
+export function updateSessionStatus(sessionId: string, status: SessionStatus): void {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `UPDATE sessions
+       SET status = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    );
+    stmt.run(status, sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to update session status: ${message}`);
+  }
 }
 
-/**
- * Get all sessions for a project
- */
-export function getSessionsByProject(projectId: number): Session[] {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM sessions WHERE project_id = ? ORDER BY created_at DESC'
-  );
-  return stmt.all(projectId) as Session[];
+export function updateSessionProcessPid(sessionId: string, pid: number | null): void {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `UPDATE sessions
+       SET current_process_pid = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    );
+    stmt.run(pid, sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to update session process pid: ${message}`);
+  }
 }
 
-/**
- * Get active sessions for a project (status = 'active' or 'running')
- */
-export function getActiveSessionsByProject(projectId: number): Session[] {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM sessions WHERE project_id = ? AND (status = ? OR status = ?) ORDER BY created_at DESC'
-  );
-  return stmt.all(projectId, 'active', 'running') as Session[];
+export function markSessionEnded(sessionId: string, status: SessionStatus): void {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `UPDATE sessions
+       SET status = ?,
+           ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    );
+    stmt.run(status, sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to mark session ended: ${message}`);
+  }
 }
 
-/**
- * Get all sessions for an instance
- */
-export function getSessionsByInstance(instanceId: string): Session[] {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM sessions WHERE instance_id = ? ORDER BY created_at DESC'
-  );
-  return stmt.all(instanceId) as Session[];
-}
-
-/**
- * Get root session for a project (no parent)
- */
-export function getRootSessionByProject(projectId: number): Session | null {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM sessions WHERE project_id = ? AND parent_id IS NULL LIMIT 1'
-  );
-  const result = stmt.get(projectId) as Session | null;
-  return result || null;
-}
-
-/**
- * Get child sessions of a session
- */
-export function getChildSessions(parentId: string): Session[] {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM sessions WHERE parent_id = ? ORDER BY created_at DESC'
-  );
-  return stmt.all(parentId) as Session[];
-}
-
-/**
- * Update session Claude session info (claude_session_id and transcript_path)
- */
-export function updateSessionClaudeInfo(
-  id: string,
-  claudeSessionId: string,
-  transcriptPath: string
+export function updateSessionClaudeLink(
+  sessionId: string,
+  claudeSessionId: string | null,
+  transcriptPath: string | null,
 ): void {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'UPDATE sessions SET last_claude_session_id = ?, last_transcript_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-  );
-  stmt.run(claudeSessionId, transcriptPath, id);
-}
-
-/**
- * Update session status
- */
-export function updateSessionStatus(id: string, status: 'active' | 'running' | 'done' | 'failed' | 'interrupted'): void {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'UPDATE sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-  );
-  stmt.run(status, id);
-}
-
-/**
- * Update session current process PID
- */
-export function updateSessionProcessPid(id: string, pid: number | null): void {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'UPDATE sessions SET current_process_pid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-  );
-  stmt.run(pid || null, id);
-}
-
-/**
- * Mark session as ended
- */
-export function markSessionEnded(id: string, status: 'done' | 'failed' | 'interrupted' = 'done'): void {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'UPDATE sessions SET status = ?, ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-  );
-  stmt.run(status, id);
-}
-
-/**
- * Update session metadata
- */
-export function updateSessionMetadata(id: string, metadataJson: string): void {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'UPDATE sessions SET metadata_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-  );
-  stmt.run(metadataJson, id);
-}
-
-/**
- * Delete session
- */
-export function deleteSession(id: string): void {
-  const db = getDatabase();
-  const stmt = db.prepare('DELETE FROM sessions WHERE id = ?');
-  stmt.run(id);
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `UPDATE sessions
+       SET last_claude_session_id = ?,
+           last_transcript_path = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    );
+    stmt.run(claudeSessionId, transcriptPath, sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to update session Claude link: ${message}`);
+  }
 }

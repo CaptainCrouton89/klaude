@@ -1,58 +1,89 @@
-/**
- * Project model - CRUD operations for projects table
- */
-
-import { getDatabase } from '../database.js';
 import type { Project } from '@/types/db.js';
+import { DatabaseError } from '@/utils/error-handler.js';
+import { getDatabase } from '../database.js';
 
-/**
- * Create a new project record
- */
-export function createProject(rootPath: string, projectHash: string): Project {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'INSERT INTO projects (root_path, project_hash) VALUES (?, ?)'
-  );
-  stmt.run(rootPath, projectHash);
-
-  return getProjectByHash(projectHash)!;
+function mapRowToProject(row: unknown): Project {
+  if (!row || typeof row !== 'object') {
+    throw new DatabaseError('Invalid project row received from database');
+  }
+  const record = row as Record<string, unknown>;
+  return {
+    id: Number(record.id),
+    root_path: String(record.root_path),
+    project_hash: String(record.project_hash),
+    created_at: String(record.created_at),
+  };
 }
 
-/**
- * Get project by project hash
- */
 export function getProjectByHash(projectHash: string): Project | null {
-  const db = getDatabase();
-  const stmt = db.prepare('SELECT * FROM projects WHERE project_hash = ?');
-  const result = stmt.get(projectHash) as Project | null;
-  return result || null;
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `SELECT id, root_path, project_hash, created_at
+       FROM projects
+       WHERE project_hash = ?`,
+    );
+    const row = stmt.get(projectHash);
+    return row ? mapRowToProject(row) : null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to fetch project by hash: ${message}`);
+  }
 }
 
-/**
- * Get project by ID
- */
-export function getProjectById(id: number): Project | null {
-  const db = getDatabase();
-  const stmt = db.prepare('SELECT * FROM projects WHERE id = ?');
-  const result = stmt.get(id) as Project | null;
-  return result || null;
+export function getProjectById(projectId: number): Project | null {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `SELECT id, root_path, project_hash, created_at
+       FROM projects
+       WHERE id = ?`,
+    );
+    const row = stmt.get(projectId);
+    return row ? mapRowToProject(row) : null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to fetch project by id: ${message}`);
+  }
 }
 
-/**
- * Get project by root path
- */
-export function getProjectByPath(rootPath: string): Project | null {
-  const db = getDatabase();
-  const stmt = db.prepare('SELECT * FROM projects WHERE root_path = ?');
-  const result = stmt.get(rootPath) as Project | null;
-  return result || null;
+export function createProject(rootPath: string, projectHash: string): Project {
+  try {
+    const db = getDatabase();
+    const insert = db.prepare(
+      `INSERT INTO projects (root_path, project_hash)
+       VALUES (?, ?)`,
+    );
+    insert.run(rootPath, projectHash);
+
+    const stmt = db.prepare(
+      `SELECT id, root_path, project_hash, created_at
+       FROM projects
+       WHERE project_hash = ?`,
+    );
+    const row = stmt.get(projectHash);
+    if (!row) {
+      throw new DatabaseError('Failed to retrieve newly created project');
+    }
+    return mapRowToProject(row);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to create project: ${message}`);
+  }
 }
 
-/**
- * Get all projects
- */
-export function getAllProjects(): Project[] {
-  const db = getDatabase();
-  const stmt = db.prepare('SELECT * FROM projects ORDER BY created_at DESC');
-  return stmt.all() as Project[];
+export function listProjects(): Project[] {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `SELECT id, root_path, project_hash, created_at
+       FROM projects
+       ORDER BY created_at DESC`,
+    );
+    const rows = stmt.all() as unknown[];
+    return rows.map(mapRowToProject);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to list projects: ${message}`);
+  }
 }

@@ -84,9 +84,22 @@ export function getProjectRunDirectory(projectHash: string, rootOverride?: strin
 export function getInstanceSocketPath(
   projectHash: string,
   instanceId: string,
-  runRootOverride?: string
+  runRootOverride?: string,
 ): string {
-  return path.join(getProjectRunDirectory(projectHash, runRootOverride), `${instanceId}.sock`);
+  const projectRunDir = getProjectRunDirectory(projectHash, runRootOverride);
+  const socketName = instanceId.slice(-8);
+  const socketPath = path.join(projectRunDir, socketName);
+
+  const byteLength = Buffer.byteLength(socketPath);
+  const unixMaxPath = 103; // leave space for null terminator
+  if (byteLength > unixMaxPath) {
+    throw new Error(
+      `Instance socket path exceeds Unix domain socket limit (${byteLength} bytes). ` +
+        'Set wrapper.socketDir to a shorter path in ~/.klaude/config.yaml.',
+    );
+  }
+
+  return socketPath;
 }
 
 /**

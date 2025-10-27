@@ -24,6 +24,7 @@ import {
   createRuntimeProcess,
   markRuntimeExited,
   createEvent,
+  getSessionById,
 } from '@/db/index.js';
 import { generateULID } from '@/utils/ulid.js';
 import {
@@ -31,6 +32,7 @@ import {
   getSessionLogPath,
 } from '@/utils/path-helper.js';
 import { KlaudeError } from '@/utils/error-handler.js';
+import type { InstanceRequest, InstanceStatusPayload } from '@/types/instance-ipc.js';
 
 interface WrapperStartOptions {
   projectCwd?: string;
@@ -44,8 +46,11 @@ interface ClaudeExitResult {
 function detectTtyPath(): string | null {
   const streams = [process.stdout, process.stderr] as WriteStream[];
   for (const stream of streams) {
-    if ((stream as WriteStream).isTTY && typeof (stream as WriteStream).path === 'string') {
-      return (stream as WriteStream).path;
+    if (stream.isTTY) {
+      const ttyStream = stream as WriteStream & { path?: unknown };
+      if (typeof ttyStream.path === 'string' && ttyStream.path.length > 0) {
+        return ttyStream.path;
+      }
     }
   }
   return null;
@@ -79,11 +84,107 @@ async function ensureLogFile(logPath: string): Promise<void> {
   }
 }
 
-async function startInstanceServer(socketPath: string): Promise<net.Server> {
+type InstanceRequestHandler = (request: InstanceRequest) => Promise<unknown>;
+
+function writeSocketResponse(socket: net.Socket, payload: unknown): void {
+  socket.write(`${JSON.stringify(payload)}\n`);
+}
+
+function handleSocketConnection(socket: net.Socket, handler: InstanceRequestHandler): void {
+  socket.setEncoding('utf8');
+  let buffer = '';
+  let responded = false;
+
+  const respond = (payload: unknown): void => {
+    if (responded) {
+      return;
+    }
+    responded = true;
+    writeSocketResponse(socket, payload);
+    socket.end();
+  };
+
+  const handleMessage = (raw: string): void => {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) {
+      return;
+    }
+
+    let request: InstanceRequest;
+    try {
+      request = JSON.parse(trimmed) as InstanceRequest;
+    } catch {
+      respond({
+        ok: false,
+        error: {
+          code: 'E_INVALID_JSON',
+          message: 'Invalid JSON payload',
+        },
+      });
+      return;
+    }
+
+    void (async () => {
+      try {
+        const result = await handler(request);
+        respond({
+          ok: true,
+          result,
+        });
+      } catch (error) {
+        if (error instanceof KlaudeError) {
+          respond({
+            ok: false,
+            error: {
+              code: error.code,
+              message: error.message,
+            },
+          });
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        respond({
+          ok: false,
+          error: {
+            code: 'E_INTERNAL',
+            message,
+          },
+        });
+      }
+    })();
+  };
+
+  socket.on('data', (chunk) => {
+    buffer += chunk;
+    let newlineIndex = buffer.indexOf('\n');
+    while (newlineIndex >= 0) {
+      const message = buffer.slice(0, newlineIndex);
+      buffer = buffer.slice(newlineIndex + 1);
+      handleMessage(message);
+      newlineIndex = buffer.indexOf('\n');
+    }
+  });
+
+  socket.on('end', () => {
+    if (buffer.length > 0) {
+      handleMessage(buffer);
+      buffer = '';
+    }
+  });
+
+  socket.on('error', (error) => {
+    console.error(`Instance socket connection error: ${error.message}`);
+  });
+}
+
+async function startInstanceServer(
+  socketPath: string,
+  handler: InstanceRequestHandler,
+): Promise<net.Server> {
   return await new Promise((resolve, reject) => {
     const server = net.createServer((socket) => {
-      socket.write(JSON.stringify({ error: 'NOT_IMPLEMENTED' }));
-      socket.end();
+      handleSocketConnection(socket, handler);
     });
 
     const handleError = (error: Error) => {
@@ -165,9 +266,72 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
   );
   await ensureLogFile(logPath);
 
-  const server = await startInstanceServer(socketPath);
+  let server: net.Server | null = null;
+
+  let runtimeProcessId: number | null = null;
+  let currentClaudePid: number | null = null;
+  let finalized = false;
+
+  const finalize = async (
+    status: 'done' | 'failed' | 'interrupted',
+    exitInfo: ClaudeExitResult | null,
+  ): Promise<void> => {
+    if (finalized) {
+      return;
+    }
+    finalized = true;
+
+    updateSessionProcessPid(rootSession.id, null);
+    markSessionEnded(rootSession.id, status);
+
+    if (runtimeProcessId !== null && exitInfo) {
+      markRuntimeExited(runtimeProcessId, exitInfo.code ?? 0);
+    }
+
+    currentClaudePid = null;
+
+    await markRegistryInstanceEnded(context, instanceId, exitInfo?.code ?? null);
+    markInstanceEnded(instanceId, exitInfo?.code ?? null);
+  };
 
   try {
+    const requestHandler: InstanceRequestHandler = async (request) => {
+      switch (request.action) {
+        case 'ping':
+          return {
+            pong: true,
+            timestamp: new Date().toISOString(),
+          };
+        case 'status': {
+          const session = getSessionById(rootSession.id);
+          if (!session) {
+            throw new KlaudeError(
+              'Root session not found for wrapper instance',
+              'E_SESSION_NOT_FOUND',
+            );
+          }
+
+          const payload: InstanceStatusPayload = {
+            instanceId,
+            projectHash: context.projectHash,
+            projectRoot: context.projectRoot,
+            rootSessionId: rootSession.id,
+            sessionStatus: session.status,
+            claudePid: currentClaudePid,
+            updatedAt: session.updated_at ?? session.created_at,
+          };
+          return payload;
+        }
+        default:
+          throw new KlaudeError(
+            `Unsupported instance request: ${(request as { action?: string }).action ?? 'unknown'}`,
+            'E_UNSUPPORTED_ACTION',
+          );
+      }
+    };
+
+    server = await startInstanceServer(socketPath, requestHandler);
+
     const claudeBinary = config.wrapper?.claudeBinary;
     if (!claudeBinary) {
       throw new KlaudeError(
@@ -196,35 +360,13 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       stdio: 'inherit',
     });
 
-    let runtimeProcessId: number | null = null;
-    let finalized = false;
-
-    const finalize = async (
-      status: 'done' | 'failed' | 'interrupted',
-      exitInfo: ClaudeExitResult | null,
-    ): Promise<void> => {
-      if (finalized) {
-        return;
-      }
-      finalized = true;
-
-      updateSessionProcessPid(rootSession.id, null);
-      markSessionEnded(rootSession.id, status);
-
-      if (runtimeProcessId !== null && exitInfo) {
-        markRuntimeExited(runtimeProcessId, exitInfo.code ?? 0);
-      }
-
-      await markRegistryInstanceEnded(context, instanceId, exitInfo?.code ?? null);
-      markInstanceEnded(instanceId, exitInfo?.code ?? null);
-    };
-
     claudeProcess.once('spawn', () => {
       updateSessionStatus(rootSession.id, 'running');
       if (claudeProcess.pid) {
         updateSessionProcessPid(rootSession.id, claudeProcess.pid);
         const runtimeProcess = createRuntimeProcess(rootSession.id, claudeProcess.pid, 'claude', true);
         runtimeProcessId = runtimeProcess.id;
+        currentClaudePid = claudeProcess.pid;
       }
       createEvent(
         'wrapper.claude.spawned',
@@ -253,9 +395,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     process.exitCode = exitResult.code ?? (exitResult.signal ? 1 : 0);
   } catch (error) {
-    await markRegistryInstanceEnded(context, instanceId, null);
-    markInstanceEnded(instanceId, null);
-    markSessionEnded(rootSession.id, 'failed');
+    await finalize('failed', null);
     createEvent(
       'wrapper.claude.error',
       project.id,
@@ -265,7 +405,9 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     process.exitCode = 1;
     throw error;
   } finally {
-    await closeInstanceServer(server);
+    if (server) {
+      await closeInstanceServer(server);
+    }
     await ensureSocketClean(socketPath);
     closeDatabase();
   }

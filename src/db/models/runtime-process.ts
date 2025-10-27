@@ -1,103 +1,131 @@
-/**
- * Runtime process model - CRUD operations for runtime_process table
- */
-
-import { getDatabase } from '../database.js';
 import type { RuntimeProcess } from '@/types/db.js';
+import { DatabaseError } from '@/utils/error-handler.js';
+import { getDatabase } from '../database.js';
 
-/**
- * Create a new runtime process record
- */
-export function createRuntimeProcess(
-  klaudeSessionId: string,
-  pid: number,
-  kind: 'wrapper' | 'claude' | 'sdk',
-  isCurrent: boolean = true
-): RuntimeProcess {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'INSERT INTO runtime_process (klaude_session_id, pid, kind, is_current) VALUES (?, ?, ?, ?)'
-  );
-  stmt.run(klaudeSessionId, pid, kind, isCurrent ? 1 : 0);
+type RuntimeProcessKind = RuntimeProcess['kind'];
 
-  // Get the inserted record
-  const getStmt = db.prepare(
-    'SELECT * FROM runtime_process WHERE klaude_session_id = ? ORDER BY started_at DESC LIMIT 1'
-  );
-  return getStmt.get(klaudeSessionId) as RuntimeProcess;
+function mapRowToRuntimeProcess(row: unknown): RuntimeProcess {
+  if (!row || typeof row !== 'object') {
+    throw new DatabaseError('Invalid runtime process row received from database');
+  }
+  const record = row as Record<string, unknown>;
+  return {
+    id: Number(record.id),
+    klaude_session_id: String(record.klaude_session_id),
+    pid: Number(record.pid),
+    kind: record.kind as RuntimeProcessKind,
+    started_at: String(record.started_at),
+    exited_at: record.exited_at === null || record.exited_at === undefined ? null : String(record.exited_at),
+    exit_code:
+      record.exit_code === null || record.exit_code === undefined
+        ? null
+        : Number(record.exit_code),
+    is_current: Number(record.is_current) === 1 ? 1 : 0,
+  };
 }
 
-/**
- * Get runtime process by ID
- */
 export function getRuntimeProcessById(id: number): RuntimeProcess | null {
-  const db = getDatabase();
-  const stmt = db.prepare('SELECT * FROM runtime_process WHERE id = ?');
-  const result = stmt.get(id) as RuntimeProcess | null;
-  return result || null;
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `SELECT *
+       FROM runtime_process
+       WHERE id = ?`,
+    );
+    const row = stmt.get(id);
+    return row ? mapRowToRuntimeProcess(row) : null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to fetch runtime process: ${message}`);
+  }
 }
 
-/**
- * Get current runtime process for a session
- */
-export function getCurrentRuntimeProcess(klaudeSessionId: string): RuntimeProcess | null {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM runtime_process WHERE klaude_session_id = ? AND is_current = 1'
-  );
-  const result = stmt.get(klaudeSessionId) as RuntimeProcess | null;
-  return result || null;
+export function listRuntimeProcessesForSession(sessionId: string): RuntimeProcess[] {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `SELECT *
+       FROM runtime_process
+       WHERE klaude_session_id = ?
+       ORDER BY started_at DESC`,
+    );
+    const rows = stmt.all(sessionId) as unknown[];
+    return rows.map(mapRowToRuntimeProcess);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to list runtime processes: ${message}`);
+  }
 }
 
-/**
- * Get all runtime processes for a session
- */
-export function getRuntimeProcessesBySession(klaudeSessionId: string): RuntimeProcess[] {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM runtime_process WHERE klaude_session_id = ? ORDER BY started_at DESC'
-  );
-  return stmt.all(klaudeSessionId) as RuntimeProcess[];
+export function clearCurrentRuntimeProcesses(sessionId: string): void {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `UPDATE runtime_process
+       SET is_current = 0
+       WHERE klaude_session_id = ?`,
+    );
+    stmt.run(sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to clear current runtime processes: ${message}`);
+  }
 }
 
-/**
- * Mark runtime process as exited
- */
-export function markRuntimeExited(id: number, exitCode: number): void {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'UPDATE runtime_process SET exited_at = CURRENT_TIMESTAMP, exit_code = ? WHERE id = ?'
-  );
-  stmt.run(exitCode, id);
+export function createRuntimeProcess(
+  sessionId: string,
+  pid: number,
+  kind: RuntimeProcessKind,
+  isCurrent: boolean,
+): RuntimeProcess {
+  try {
+    const db = getDatabase();
+
+    if (isCurrent) {
+      clearCurrentRuntimeProcesses(sessionId);
+    }
+
+    const insert = db.prepare(
+      `INSERT INTO runtime_process (klaude_session_id, pid, kind, is_current)
+       VALUES (?, ?, ?, ?)`,
+    );
+    insert.run(sessionId, pid, kind, isCurrent ? 1 : 0);
+
+    const idStmt = db.prepare('SELECT last_insert_rowid() AS id');
+    const idRow = idStmt.get() as { id: number } | null;
+    if (!idRow) {
+      throw new DatabaseError('Failed to determine runtime process id');
+    }
+
+    const select = db.prepare(
+      `SELECT *
+       FROM runtime_process
+       WHERE id = ?`,
+    );
+    const row = select.get(idRow.id);
+    if (!row) {
+      throw new DatabaseError('Failed to retrieve newly created runtime process');
+    }
+    return mapRowToRuntimeProcess(row);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to create runtime process: ${message}`);
+  }
 }
 
-/**
- * Mark a process as no longer current
- */
-export function markProcessNotCurrent(id: number): void {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'UPDATE runtime_process SET is_current = 0 WHERE id = ?'
-  );
-  stmt.run(id);
-}
-
-/**
- * Mark all processes for a session as not current
- */
-export function markAllProcessesNotCurrent(klaudeSessionId: string): void {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'UPDATE runtime_process SET is_current = 0 WHERE klaude_session_id = ?'
-  );
-  stmt.run(klaudeSessionId);
-}
-
-/**
- * Delete runtime process record
- */
-export function deleteRuntimeProcess(id: number): void {
-  const db = getDatabase();
-  const stmt = db.prepare('DELETE FROM runtime_process WHERE id = ?');
-  stmt.run(id);
+export function markRuntimeExited(runtimeProcessId: number, exitCode: number): void {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `UPDATE runtime_process
+       SET exited_at = COALESCE(exited_at, CURRENT_TIMESTAMP),
+           exit_code = ?,
+           is_current = 0
+       WHERE id = ?`,
+    );
+    stmt.run(exitCode, runtimeProcessId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to mark runtime process exited: ${message}`);
+  }
 }

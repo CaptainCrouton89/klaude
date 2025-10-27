@@ -1,124 +1,97 @@
-/**
- * Event model - CRUD operations for events table
- */
-
-import { getDatabase } from '../database.js';
 import type { Event } from '@/types/db.js';
+import { DatabaseError } from '@/utils/error-handler.js';
+import { getDatabase } from '../database.js';
 
-/**
- * Create a new event
- */
+function mapRowToEvent(row: unknown): Event {
+  if (!row || typeof row !== 'object') {
+    throw new DatabaseError('Invalid event row received from database');
+  }
+  const record = row as Record<string, unknown>;
+  return {
+    id: Number(record.id),
+    project_id:
+      record.project_id === null || record.project_id === undefined
+        ? null
+        : Number(record.project_id),
+    klaude_session_id:
+      record.klaude_session_id === null || record.klaude_session_id === undefined
+        ? null
+        : String(record.klaude_session_id),
+    kind: String(record.kind),
+    payload_json:
+      record.payload_json === null || record.payload_json === undefined
+        ? null
+        : String(record.payload_json),
+    created_at: String(record.created_at),
+  };
+}
+
 export function createEvent(
   kind: string,
-  projectId?: number | null,
-  klaudeSessionId?: string | null,
-  payloadJson?: string | null
+  projectId: number | null,
+  sessionId: string | null,
+  payloadJson: string | null = null,
 ): Event {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'INSERT INTO events (kind, project_id, klaude_session_id, payload_json) VALUES (?, ?, ?, ?)'
-  );
-  stmt.run(kind, projectId || null, klaudeSessionId || null, payloadJson || null);
+  try {
+    const db = getDatabase();
+    const insert = db.prepare(
+      `INSERT INTO events (project_id, klaude_session_id, kind, payload_json)
+       VALUES (?, ?, ?, ?)`,
+    );
+    insert.run(projectId ?? null, sessionId ?? null, kind, payloadJson ?? null);
 
-  // Get the inserted event
-  const getStmt = db.prepare(
-    'SELECT * FROM events ORDER BY id DESC LIMIT 1'
-  );
-  return getStmt.get() as Event;
+    const idStmt = db.prepare('SELECT last_insert_rowid() AS id');
+    const idRow = idStmt.get() as { id: number } | null;
+    if (!idRow) {
+      throw new DatabaseError('Failed to determine event id');
+    }
+
+    const select = db.prepare(
+      `SELECT *
+       FROM events
+       WHERE id = ?`,
+    );
+    const row = select.get(idRow.id);
+    if (!row) {
+      throw new DatabaseError('Failed to retrieve newly created event');
+    }
+    return mapRowToEvent(row);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to create event: ${message}`);
+  }
 }
 
-/**
- * Get event by ID
- */
-export function getEventById(id: number): Event | null {
-  const db = getDatabase();
-  const stmt = db.prepare('SELECT * FROM events WHERE id = ?');
-  const result = stmt.get(id) as Event | null;
-  return result || null;
+export function listEventsByProject(projectId: number): Event[] {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `SELECT *
+       FROM events
+       WHERE project_id = ?
+       ORDER BY created_at DESC`,
+    );
+    const rows = stmt.all(projectId) as unknown[];
+    return rows.map(mapRowToEvent);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to list events for project: ${message}`);
+  }
 }
 
-/**
- * Get events by project
- */
-export function getEventsByProject(projectId: number, limit: number = 100, offset: number = 0): Event[] {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM events WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
-  );
-  return stmt.all(projectId, limit, offset) as Event[];
-}
-
-/**
- * Get events by session
- */
-export function getEventsBySession(klaudeSessionId: string, limit: number = 100, offset: number = 0): Event[] {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM events WHERE klaude_session_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
-  );
-  return stmt.all(klaudeSessionId, limit, offset) as Event[];
-}
-
-/**
- * Get events by kind
- */
-export function getEventsByKind(kind: string, limit: number = 100): Event[] {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM events WHERE kind = ? ORDER BY created_at DESC LIMIT ?'
-  );
-  return stmt.all(kind, limit) as Event[];
-}
-
-/**
- * Get recent events
- */
-export function getRecentEvents(limit: number = 100): Event[] {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT * FROM events ORDER BY created_at DESC LIMIT ?'
-  );
-  return stmt.all(limit) as Event[];
-}
-
-/**
- * Count events by project
- */
-export function countEventsByProject(projectId: number): number {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT COUNT(*) as count FROM events WHERE project_id = ?'
-  );
-  const result = stmt.get(projectId) as { count: number };
-  return result.count;
-}
-
-/**
- * Count events by session
- */
-export function countEventsBySession(klaudeSessionId: string): number {
-  const db = getDatabase();
-  const stmt = db.prepare(
-    'SELECT COUNT(*) as count FROM events WHERE klaude_session_id = ?'
-  );
-  const result = stmt.get(klaudeSessionId) as { count: number };
-  return result.count;
-}
-
-/**
- * Delete events by project (cascading)
- */
-export function deleteEventsByProject(projectId: number): void {
-  const db = getDatabase();
-  const stmt = db.prepare('DELETE FROM events WHERE project_id = ?');
-  stmt.run(projectId);
-}
-
-/**
- * Delete events by session
- */
-export function deleteEventsBySession(klaudeSessionId: string): void {
-  const db = getDatabase();
-  const stmt = db.prepare('DELETE FROM events WHERE klaude_session_id = ?');
-  stmt.run(klaudeSessionId);
+export function listEventsBySession(sessionId: string): Event[] {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `SELECT *
+       FROM events
+       WHERE klaude_session_id = ?
+       ORDER BY created_at DESC`,
+    );
+    const rows = stmt.all(sessionId) as unknown[];
+    return rows.map(mapRowToEvent);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to list events for session: ${message}`);
+  }
 }
