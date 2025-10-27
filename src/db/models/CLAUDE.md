@@ -1,29 +1,32 @@
 # DB Models
 
-TypeScript interfaces and types for SQLite schema entities.
+TypeScript types and CRUD operations for SQLite schema entities.
 
 ## File Overview
 
-- `project.ts` – Project entity (name, directory, hash)
-- `instance.ts` – Wrapper instance (unique per `klaude` invocation, TTY/socket management)
-- `session.ts` – Claude session (tracks native Claude session ID, agent type, prompt, status)
-- `event.ts` – Session events (log entries, messages, state transitions)
-- `runtime-process.ts` – Agent process runtime (PID, socket path, exit code)
-- `claude-session-link.ts` – Hook-managed link between Claude's native session ID and Klaude session ID
+- `project.ts` – Project CRUD (get by hash/id, create, list)
+- `instance.ts` – Instance CRUD (get by id, list, create, mark ended)
+- `session.ts` – Session CRUD (get, list, create, update status/PID/links, mark ended)
+- `event.ts` – Event CRUD
+- `runtime-process.ts` – Process runtime CRUD
+- `claude-session-link.ts` – Claude ↔ Klaude link CRUD
 
 ## Key Patterns
 
-**Primary Keys**: All entities use ULID (`ulid()` from utils) for deterministic, sortable IDs.
+**Type Safety**: Each file exports a mapper function that validates and type-casts raw DB rows to types from `@/types/db.js`.
 
-**Timestamps**: `createdAt` and `updatedAt` as ISO 8601 strings (SQLite TEXT).
+**Error Handling**: All operations throw `DatabaseError` with context-specific messages.
 
-**Status Enums**: Session and process have explicit status strings (`pending`, `running`, `completed`, `failed`).
+**Timestamps**: ISO 8601 strings (SQLite TEXT) for `created_at`, `updated_at`, `started_at`, `ended_at`.
 
-**Foreign Keys**: Enforced at type level; SQLite `PRAGMA foreign_keys = ON` in db/index.ts.
+**Status Fields**: Session and instance have explicit status strings (`active`, `completed`, `failed`, etc.).
+
+**Null Handling**: Mapper functions explicitly handle null/undefined DB values during type casting.
 
 ## Integration Notes
 
-- Models are **read-only types** — all DB operations via `src/db/` CRUD functions
-- Used by `src/services/` for business logic (config, wrapper orchestration)
+- Used by `src/services/` for business logic
+- All queries use prepared statements via `better-sqlite3`
+- Foreign keys enforced (`PRAGMA foreign_keys = ON` in `src/db/database.js`)
 - Event table supports streaming via query filters (session ID, timestamp range)
 - Session link relies on hook integration; see root CLAUDE.md for hook setup
