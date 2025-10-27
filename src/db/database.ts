@@ -2,10 +2,10 @@
  * SQLite database implementation using sql.js with persistence to disk
  */
 
-import initSqlJs, { Database as SqlJsDatabase, Statement as SqlJsStatement } from 'sql.js';
-import { getDbPath, getKlaudeHome } from '@/utils/path-helper.js';
+import { getDbPath } from '@/utils/path-helper.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
+import initSqlJs, { Database as SqlJsDatabase, Statement as SqlJsStatement } from 'sql.js';
 
 /**
  * Database statement wrapper
@@ -229,9 +229,8 @@ function initializeSchema(db: Database): void {
       parent_session_id TEXT REFERENCES sessions(id),
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
-      completed_at INTEGER,
       status TEXT NOT NULL CHECK (status IN ('created', 'running', 'completed', 'failed')),
-      prompt TEXT NOT NULL,
+      prompt TEXT DEFAULT '',
       result TEXT,
       metadata TEXT,
       FOREIGN KEY (parent_session_id) REFERENCES sessions(id)

@@ -75,9 +75,7 @@ export interface IAgentManager {
 export interface IMessageQueue {
   enqueue(fromSessionId: string, toSessionId: string, content: string): Promise<Message>;
   dequeue(sessionId: string): Promise<Message[]>;
-  subscribe(sessionId: string, callback: (message: Message) => void): void;
   ack(messageId: string): Promise<void>;
-  shutdown(): void;
 }
 
 export interface ILogger {
@@ -104,12 +102,8 @@ export interface CLIContext {
 export interface KlaudeConfig {
   sdk: {
     model: string;
-    maxThinkingTokens?: number;
     permissionMode?: string;
     fallbackModel?: string;
-  };
-  session: {
-    maxConcurrentAgents?: number;
   };
   server?: {
     enabled: boolean;

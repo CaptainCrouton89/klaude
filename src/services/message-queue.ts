@@ -1,9 +1,12 @@
 /**
  * Inter-agent message queue system
+ *
+ * Uses signal-based notification (SIGUSR1) for instant message delivery.
+ * Messages persist in SQLite for durability and offline access.
  */
 
-import { IMessageQueue, Message } from '@/types/index.js';
 import { getDatabase } from '@/db/database.js';
+import { IMessageQueue, Message } from '@/types/index.js';
 import { randomBytes } from 'crypto';
 
 /**
@@ -34,19 +37,30 @@ function rowToMessage(row: MessageRow): Message {
 }
 
 /**
- * Message Queue implementation using database
+ * Helper to find the process ID for a given session
+ */
+function getSessionProcessId(sessionId: string): number | null {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(`
+      SELECT process_id FROM sessions WHERE id = ?
+    `);
+    const result = stmt.get(sessionId) as { process_id: number } | undefined;
+    return result?.process_id ?? null;
+  } catch (error) {
+    // Database query failed; session may not exist or db unavailable
+    // Return null to skip signal delivery (message will be available on dequeue)
+    return null;
+  }
+}
+
+/**
+ * Message Queue implementation using database with signal-based notifications
  */
 export class MessageQueue implements IMessageQueue {
-  private subscribers: Map<string, Set<(message: Message) => void>> = new Map();
-  private pollInterval: NodeJS.Timeout | null = null;
-  private readonly POLL_INTERVAL_MS = 1000;
-
-  constructor() {
-    this.startPolling();
-  }
-
   /**
    * Enqueue a message from one session to another
+   * Sends SIGUSR1 signal to target process for instant notification
    */
   async enqueue(fromSessionId: string, toSessionId: string, content: string): Promise<Message> {
     const db = getDatabase();
@@ -59,6 +73,23 @@ export class MessageQueue implements IMessageQueue {
     `);
 
     stmt.run(messageId, fromSessionId, toSessionId, content, now);
+
+    // Signal the target process immediately
+    const targetPid = getSessionProcessId(toSessionId);
+    if (targetPid) {
+      try {
+        process.kill(targetPid, 'SIGUSR1');
+      } catch (error) {
+        // Only ignore ESRCH (process doesn't exist) - message will be dequeued later
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        const nodeError = error as NodeJS.ErrnoException;
+        if (nodeError.code !== 'ESRCH') {
+          throw nodeError;
+        }
+      }
+    }
 
     return {
       id: messageId,
@@ -85,28 +116,6 @@ export class MessageQueue implements IMessageQueue {
   }
 
   /**
-   * Subscribe to messages for a session
-   */
-  subscribe(sessionId: string, callback: (message: Message) => void): void {
-    if (!this.subscribers.has(sessionId)) {
-      this.subscribers.set(sessionId, new Set());
-    }
-    this.subscribers.get(sessionId)!.add(callback);
-  }
-
-  /**
-   * Unsubscribe from messages for a session
-   */
-  unsubscribe(sessionId: string, callback: (message: Message) => void): void {
-    if (this.subscribers.has(sessionId)) {
-      this.subscribers.get(sessionId)!.delete(callback);
-      if (this.subscribers.get(sessionId)!.size === 0) {
-        this.subscribers.delete(sessionId);
-      }
-    }
-  }
-
-  /**
    * Mark message as read/acknowledged
    */
   async ack(messageId: string): Promise<void> {
@@ -118,82 +127,6 @@ export class MessageQueue implements IMessageQueue {
     `);
 
     stmt.run(now, messageId);
-  }
-
-  /**
-   * Start polling for new messages
-   */
-  private startPolling(): void {
-    this.pollInterval = setInterval(async () => {
-      const sessionIds = Array.from(this.subscribers.keys());
-
-      for (const sessionId of sessionIds) {
-        try {
-          const messages = await this.dequeue(sessionId);
-
-          if (messages.length > 0) {
-            const callbacks = this.subscribers.get(sessionId);
-            if (callbacks) {
-              for (const message of messages) {
-                for (const callback of callbacks) {
-                  callback(message);
-                }
-                // Auto-acknowledge after callbacks
-                await this.ack(message.id);
-              }
-            }
-          }
-        } catch (error) {
-          console.error(`Error polling messages for session ${sessionId}:`, error);
-        }
-      }
-    }, this.POLL_INTERVAL_MS);
-  }
-
-  /**
-   * Stop polling for messages
-   */
-  stopPolling(): void {
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval);
-      this.pollInterval = null;
-    }
-  }
-
-  /**
-   * Shutdown the message queue and release resources
-   */
-  shutdown(): void {
-    this.stopPolling();
-  }
-
-  /**
-   * Get all unread message count for a session
-   */
-  async getUnreadCount(sessionId: string): Promise<number> {
-    const db = getDatabase();
-    const stmt = db.prepare(`
-      SELECT COUNT(*) as count FROM messages
-      WHERE to_session_id = ? AND read_at IS NULL
-    `);
-
-    const result = stmt.get(sessionId) as { count: number };
-    return result.count;
-  }
-
-  /**
-   * Clear old messages (older than 24 hours)
-   */
-  async clearOldMessages(maxAgeMs: number): Promise<number> {
-    const db = getDatabase();
-    const cutoffTime = Date.now() - maxAgeMs;
-
-    const stmt = db.prepare(`
-      DELETE FROM messages WHERE created_at < ?
-    `);
-
-    const result = stmt.run(cutoffTime);
-    return result.changes;
   }
 }
 

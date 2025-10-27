@@ -6,18 +6,15 @@ import { KlaudeConfig } from '@/types/index.js';
 
 export const DEFAULT_CONFIG: KlaudeConfig = {
   sdk: {
-    model: 'claude-haiku-4-5-20251001',
-    maxThinkingTokens: 8000,
-    permissionMode: 'bypassPermissions',
-  },
-  session: {
-    maxConcurrentAgents: 10,
+    model: "claude-haiku-4-5-20251001",
+    permissionMode: "bypassPermissions",
   },
   server: {
     enabled: false,
     port: 8000,
   },
   wrapper: {
-    claudeBinary: '/opt/homebrew/bin/claude',
+    claudeBinary:
+      "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js",
   },
 };

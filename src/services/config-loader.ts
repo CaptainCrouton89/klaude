@@ -2,12 +2,11 @@
  * Configuration loading and initialization
  */
 
+import { DEFAULT_CONFIG } from '@/config/defaults.js';
 import { KlaudeConfig } from '@/types/index.js';
 import { getConfigFilePath, getKlaudeHome } from '@/utils/path-helper.js';
-import { promises as fs } from 'fs';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, promises as fs, mkdirSync } from 'fs';
 import yaml from 'js-yaml';
-import { DEFAULT_CONFIG } from '@/config/defaults.js';
 import path from 'path';
 
 /**
@@ -98,11 +97,6 @@ function mergeConfig(defaults: KlaudeConfig, partial: Partial<KlaudeConfig>): Kl
     Object.assign(sdkConfig, partial.sdk);
   }
 
-  const sessionConfig = { ...defaults.session };
-  if (partial.session) {
-    Object.assign(sessionConfig, partial.session);
-  }
-
   const serverConfig = { ...(defaults.server ?? {}) };
   if (partial.server) {
     Object.assign(serverConfig, partial.server);
@@ -115,7 +109,6 @@ function mergeConfig(defaults: KlaudeConfig, partial: Partial<KlaudeConfig>): Kl
 
   return {
     sdk: sdkConfig as KlaudeConfig['sdk'],
-    session: sessionConfig as KlaudeConfig['session'],
     server: serverConfig as KlaudeConfig['server'],
     wrapper: wrapperConfig as KlaudeConfig['wrapper'],
   };
