@@ -2,6 +2,7 @@ import net from 'node:net';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { WriteStream } from 'node:tty';
 
 import { loadConfig } from '@/services/config-loader.js';
@@ -25,6 +26,9 @@ import {
   markRuntimeExited,
   createEvent,
   getSessionById,
+  createClaudeSessionLink,
+  updateSessionClaudeLink,
+  getClaudeSessionLink,
 } from '@/db/index.js';
 import { generateULID } from '@/utils/ulid.js';
 import { getInstanceSocketPath, getSessionLogPath } from '@/utils/path-helper.js';
@@ -225,6 +229,23 @@ function mapExitToStatus(result: ClaudeExitResult): 'done' | 'failed' | 'interru
   return 'failed';
 }
 
+type AgentRuntimeEvent =
+  | { type: 'status'; status: 'starting' | 'running' | 'completed'; detail?: string }
+  | { type: 'message'; messageType: string; payload: unknown; text?: string | null }
+  | { type: 'error'; message: string; stack?: string }
+  | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }
+  | { type: 'result'; result?: unknown; stopReason?: string | null }
+  | { type: 'claude-session'; sessionId: string; transcriptPath?: string | null }
+  | { type: 'done'; status: 'done' | 'failed' | 'interrupted'; reason?: string };
+
+interface AgentRuntimeState {
+  sessionId: string;
+  process: ChildProcess;
+  runtimeProcessId: number | null;
+  status: 'pending' | 'running' | 'done' | 'failed' | 'interrupted';
+  logPath: string;
+  detached: boolean;
+}
 
 export async function startWrapperInstance(options: WrapperStartOptions = {}): Promise<void> {
   const cwd = options.projectCwd ?? process.cwd();
@@ -285,6 +306,12 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
   await ensureLogFile(rootLogPath);
 
   let server: net.Server | null = null;
+
+  const agentRuntimeEntryPath = fileURLToPath(
+    new URL('../runtime/agent-runtime.js', import.meta.url),
+  );
+
+  const agentRuntimes = new Map<string, AgentRuntimeState>();
 
   interface PendingSwitch {
     targetSessionId: string;
@@ -389,6 +416,8 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     await appendSessionEvent(sessionLogPath, 'agent.session.created', eventPayload);
 
+    await startAgentRuntimeProcess(session, agentType, payload);
+
     return {
       sessionId: session.id,
       status: session.status,
@@ -411,6 +440,266 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     await appendSessionEvent(sessionLogPath, kind, payload);
   }
 
+  async function handleAgentRuntimeEvent(
+    sessionId: string,
+    event: AgentRuntimeEvent,
+    runtimeState: AgentRuntimeState,
+  ): Promise<void> {
+    switch (event.type) {
+      case 'status': {
+        await recordSessionEvent(sessionId, 'agent.runtime.status', {
+          status: event.status,
+          detail: event.detail ?? null,
+        });
+        if (event.status === 'running') {
+          updateSessionStatus(sessionId, 'running');
+          runtimeState.status = 'running';
+        }
+        if (event.status === 'completed' && runtimeState.status === 'running') {
+          updateSessionStatus(sessionId, 'done');
+          markSessionEnded(sessionId, 'done');
+          runtimeState.status = 'done';
+        }
+        break;
+      }
+      case 'message': {
+        await recordSessionEvent(sessionId, 'agent.runtime.message', {
+          messageType: event.messageType,
+          payload: event.payload,
+          text: event.text ?? null,
+        });
+        break;
+      }
+      case 'log': {
+        await recordSessionEvent(sessionId, 'agent.runtime.log', {
+          level: event.level,
+          message: event.message,
+        });
+        break;
+      }
+      case 'result': {
+        await recordSessionEvent(sessionId, 'agent.runtime.result', {
+          result: event.result ?? null,
+          stopReason: event.stopReason ?? null,
+        });
+        break;
+      }
+      case 'error': {
+        await recordSessionEvent(sessionId, 'agent.runtime.error', {
+          message: event.message,
+          stack: event.stack ?? null,
+        });
+        updateSessionStatus(sessionId, 'failed');
+        markSessionEnded(sessionId, 'failed');
+        runtimeState.status = 'failed';
+        break;
+      }
+      case 'done': {
+        const finalStatus = event.status;
+        await recordSessionEvent(sessionId, 'agent.runtime.done', {
+          status: finalStatus,
+          reason: event.reason ?? null,
+        });
+        updateSessionStatus(sessionId, finalStatus);
+        markSessionEnded(sessionId, finalStatus);
+        runtimeState.status = finalStatus;
+        break;
+      }
+      case 'claude-session': {
+        const link = getClaudeSessionLink(event.sessionId);
+        if (!link) {
+          try {
+            createClaudeSessionLink(sessionId, event.sessionId, {
+              transcriptPath: event.transcriptPath ?? null,
+              source: 'sdk',
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            await recordSessionEvent(sessionId, 'agent.runtime.link.error', {
+              message,
+            });
+          }
+        }
+        updateSessionClaudeLink(sessionId, event.sessionId, event.transcriptPath ?? null);
+        await recordSessionEvent(sessionId, 'agent.runtime.claude-session', {
+          sessionId: event.sessionId,
+          transcriptPath: event.transcriptPath ?? null,
+        });
+        break;
+      }
+      default: {
+        await recordSessionEvent(sessionId, 'agent.runtime.event.unknown', event);
+      }
+    }
+  }
+
+  async function handleAgentRuntimeExit(
+    sessionId: string,
+    exitInfo: ClaudeExitResult,
+    runtimeState: AgentRuntimeState,
+  ): Promise<void> {
+    updateSessionProcessPid(sessionId, null);
+
+    if (runtimeState.runtimeProcessId !== null) {
+      markRuntimeExited(runtimeState.runtimeProcessId, exitInfo.code ?? 0);
+    }
+
+    const inferredStatus = mapExitToStatus(exitInfo);
+
+    if (runtimeState.status === 'pending' || runtimeState.status === 'running') {
+      updateSessionStatus(sessionId, inferredStatus);
+      markSessionEnded(sessionId, inferredStatus);
+      runtimeState.status = inferredStatus;
+    }
+
+    await recordSessionEvent(sessionId, 'agent.runtime.process.exited', {
+      code: exitInfo.code,
+      signal: exitInfo.signal ?? null,
+      inferredStatus,
+    });
+  }
+
+  async function startAgentRuntimeProcess(
+    session: ReturnType<typeof createSession>,
+    agentType: string,
+    payload: StartAgentRequestPayload,
+  ): Promise<void> {
+    try {
+      await fsp.access(agentRuntimeEntryPath);
+    } catch {
+      throw new KlaudeError(
+        'Agent runtime entry point not found. Run `npm run build` to compile runtime scripts.',
+        'E_AGENT_RUNTIME_ENTRY_MISSING',
+      );
+    }
+
+    const sessionLogPath = getSessionLogPath(
+      context.projectHash,
+      session.id,
+      wrapperConfig.projectsDir,
+    );
+
+    const child = spawn(process.execPath, [agentRuntimeEntryPath], {
+      cwd: context.projectRoot,
+      env: {
+        ...process.env,
+        KLAUDE_PROJECT_HASH: context.projectHash,
+        KLAUDE_INSTANCE_ID: instanceId,
+        KLAUDE_SESSION_ID: session.id,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const runtimeState: AgentRuntimeState = {
+      sessionId: session.id,
+      process: child,
+      runtimeProcessId: null,
+      status: 'pending',
+      logPath: sessionLogPath,
+      detached: Boolean(payload.options?.detach),
+    };
+
+    agentRuntimes.set(session.id, runtimeState);
+
+    child.once('spawn', async () => {
+      if (!child.pid) {
+        return;
+      }
+      const runtimeProcess = createRuntimeProcess(session.id, child.pid, 'sdk', true);
+      runtimeState.runtimeProcessId = runtimeProcess.id;
+      updateSessionProcessPid(session.id, child.pid);
+      updateSessionStatus(session.id, 'running');
+      runtimeState.status = 'running';
+
+      await recordSessionEvent(session.id, 'agent.runtime.spawned', {
+        pid: child.pid,
+        detached: runtimeState.detached,
+        agentType,
+      });
+    });
+
+    child.once('error', async (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      await recordSessionEvent(session.id, 'agent.runtime.process.error', { message });
+      updateSessionStatus(session.id, 'failed');
+      markSessionEnded(session.id, 'failed');
+      runtimeState.status = 'failed';
+    });
+
+    child.stdout?.setEncoding('utf8');
+    let stdoutBuffer = '';
+    child.stdout?.on('data', (chunk: string) => {
+      stdoutBuffer += chunk;
+      let newlineIndex = stdoutBuffer.indexOf('\n');
+      while (newlineIndex >= 0) {
+        const line = stdoutBuffer.slice(0, newlineIndex).trim();
+        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+        if (line.length > 0) {
+          try {
+            const event = JSON.parse(line) as AgentRuntimeEvent;
+            void handleAgentRuntimeEvent(session.id, event, runtimeState);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            void recordSessionEvent(session.id, 'agent.runtime.event.parse_error', {
+              line,
+              message,
+            });
+          }
+        }
+        newlineIndex = stdoutBuffer.indexOf('\n');
+      }
+    });
+
+    child.stdout?.on('end', () => {
+      const remaining = stdoutBuffer.trim();
+      if (remaining.length > 0) {
+        void recordSessionEvent(session.id, 'agent.runtime.stdout.trailing', {
+          data: remaining,
+        });
+      }
+      stdoutBuffer = '';
+    });
+
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk: string) => {
+      const data = chunk.toString();
+      void recordSessionEvent(session.id, 'agent.runtime.stderr', { data });
+    });
+
+    child.once('exit', (code, signal) => {
+      const exitInfo: ClaudeExitResult = { code, signal };
+      void handleAgentRuntimeExit(session.id, exitInfo, runtimeState).finally(() => {
+        agentRuntimes.delete(session.id);
+      });
+    });
+
+    const runtimeInitPayload = {
+      sessionId: session.id,
+      agentType,
+      prompt: payload.prompt,
+      options: payload.options ?? {},
+      metadata: {
+        projectHash: context.projectHash,
+        instanceId,
+        parentSessionId: session.parent_id ?? null,
+        agentCount: payload.agentCount ?? null,
+        projectRoot: context.projectRoot,
+      },
+      sdk: {
+        model: config.sdk?.model ?? null,
+        permissionMode: config.sdk?.permissionMode ?? null,
+        fallbackModel: config.sdk?.fallbackModel ?? null,
+      },
+    };
+
+    try {
+      child.stdin?.write(`${JSON.stringify(runtimeInitPayload)}\n`);
+      child.stdin?.end();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await recordSessionEvent(session.id, 'agent.runtime.stdin.error', { message });
+    }
+  }
   async function waitForClaudeSessionId(
     sessionId: string,
     waitSeconds: number,
