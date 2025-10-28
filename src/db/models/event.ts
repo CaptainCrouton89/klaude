@@ -1,6 +1,6 @@
 import type { Event } from '@/types/db.js';
 import { DatabaseError } from '@/utils/error-handler.js';
-import { getDatabase } from '../database.js';
+import { getDatabase, initializeDatabase } from '../database.js';
 
 function mapRowToEvent(row: unknown): Event {
   if (!row || typeof row !== 'object') {
@@ -26,13 +26,16 @@ function mapRowToEvent(row: unknown): Event {
   };
 }
 
-export function createEvent(
+export async function createEvent(
   kind: string,
   projectId: number | null,
   sessionId: string | null,
   payloadJson: string | null = null,
-): Event {
+): Promise<Event> {
   try {
+    // Ensure database is initialized
+    await initializeDatabase();
+
     const db = getDatabase();
     const insertWithReturn = db.prepare(
       `INSERT INTO events (project_id, klaude_session_id, kind, payload_json)
