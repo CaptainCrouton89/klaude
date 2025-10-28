@@ -4,21 +4,22 @@ Core business logic for spawning Claude, managing wrapper instances, and coordin
 
 ## Key Patterns
 
-**Socket-based IPC**: Wrapper instance listens on `~/.klaude/run/<projectHash>/<instanceId>.sock`. Clients send newline-delimited JSON requests, receive live session data.
+**Socket-based IPC**: Wrapper instance listens on `~/.klaude/run/<projectHash>/<instanceId>.sock`. Clients send newline-delimited JSON requests; wrapper responds with JSON and closes socket (one-shot per connection).
 
-**Instance Lifecycle**:
-1. `project-context.ts:prepareProjectContext()` resolves project root, derives SHA-256 hash, scaffolds directories
-2. `wrapper-instance.ts:startWrapperInstance()` creates socket server, spawns Claude, dispatches IPC requests
-3. Hook handlers persist Claude session → Klaude session links via env vars
-4. `instance-client.ts` provides CLI-side request/response interface
+**Session Checkout State Machine** (`wrapper-instance.ts:1279-1478`): Complex dance:
+1. Validate target session has Claude session ID (try active link → wait for hooks → wait for SDK)
+2. Set `state.pendingSwitch` to block concurrent checkouts
+3. Send SIGTERM to current Claude, wait `switch.graceSeconds`, then SIGKILL
+4. On Claude exit, detect `pendingSwitch` and launch Claude `--resume` for target
+5. Resolve checkout promise when target Claude spawns
 
-**Agent Runtime Event Streaming**: Agent processes output newline-delimited JSON events (status, messages, logs, errors, claude-session links). Wrapper parses, persists to session log, updates DB state via `handleAgentRuntimeEvent()`.
+**Hook Timing Criticality** (`wrapper-instance.ts:1001-1023`): Fresh Claude launches wait 10s for `session-start` hook to link Claude session ID. This is a hard blocker—if hook fails to fire, wrapper throws `E_HOOK_TIMEOUT`. Existing sessions skip this since links exist.
 
-**Session Checkout Workflow**: Target session must have Claude session ID. Wrapper terminates current Claude process (SIGTERM → grace period → SIGKILL), spawns new Claude with `--resume` for target. Checkout blocks until termination complete; handles mid-flight exits during switch.
+**Message Resumption** (`wrapper-instance.ts:1119-1202`): If agent runtime stopped, incoming message detects missing runtime, restarts it resuming prior Claude session. Resume ID selection: active link → latest link → wait for active link/last ID.
 
-**Process Termination with Grace Period**: `terminateCurrentClaudeProcess()` sends SIGTERM, waits `switch.graceSeconds`, then SIGKILL if still alive. Timer is unref'd to not block shutdown.
+**Agent Runtime Event Streaming**: Child process outputs newline-delimited JSON events. Wrapper streams events: `status` (pending→running→completed) → `claude-session` link creation → `done`/`error`. All recorded to DB + session log.
 
-**Error Handling**: Fail fast with specific error codes (KlaudeError). No fallbacks.
+**Error Handling**: Fail fast with specific codes (E_HOOK_TIMEOUT, E_SWITCH_TARGET_MISSING, E_AGENT_NOT_RUNNING). No fallbacks.
 
 ## File Overview
 
