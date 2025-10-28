@@ -12,13 +12,19 @@ Core business logic for spawning Claude, managing wrapper instances, and coordin
 3. Hook handlers persist Claude session → Klaude session links via env vars
 4. `instance-client.ts` provides CLI-side request/response interface
 
+**Agent Runtime Event Streaming**: Agent processes output newline-delimited JSON events (status, messages, logs, errors, claude-session links). Wrapper parses, persists to session log, updates DB state via `handleAgentRuntimeEvent()`.
+
+**Session Checkout Workflow**: Target session must have Claude session ID. Wrapper terminates current Claude process (SIGTERM → grace period → SIGKILL), spawns new Claude with `--resume` for target. Checkout blocks until termination complete; handles mid-flight exits during switch.
+
+**Process Termination with Grace Period**: `terminateCurrentClaudeProcess()` sends SIGTERM, waits `switch.graceSeconds`, then SIGKILL if still alive. Timer is unref'd to not block shutdown.
+
 **Error Handling**: Fail fast with specific error codes (KlaudeError). No fallbacks.
 
 ## File Overview
 
 | File | Purpose |
 |------|---------|
-| `wrapper-instance.ts` | Socket server, Claude spawn/kill, agent session dispatch |
+| `wrapper-instance.ts` | Socket server, Claude/agent spawn, event streaming, session checkout |
 | `project-context.ts` | Project root resolution, hash derivation, directory scaffolding |
 | `instance-client.ts` | CLI-side net client, IPC request marshaling |
 | `config.ts` | Load/validate config, expose wrapper settings |
@@ -38,8 +44,5 @@ Core business logic for spawning Claude, managing wrapper instances, and coordin
 - **Project hash**: SHA-256(projectRoot).slice(0, 24) for Unix socket path length constraints
 - **Export env vars**: Hooks receive `KLAUDE_PROJECT_HASH`, `KLAUDE_INSTANCE_ID`, `KLAUDE_SESSION_ID`
 - **TTY detection**: Dynamic TTY path detection for proper foreground TUI behavior
-
-## See Also
-
-- `prd.md` – Full architecture, CLI spec, error model
-- `src/types/instance-ipc.ts` – IPC request/response types
+- **Agent runtime entry**: Built to `src/runtime/agent-runtime.js`; wrapper spawns as subprocess via stdin/stdout event stream
+- **Detached agents**: Support both attached (TUI-aware) and detached (headless) modes via `StartAgentRequestPayload.options.detach`
