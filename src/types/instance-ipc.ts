@@ -4,7 +4,49 @@
 
 export type InstanceRequest =
   | { action: 'ping' }
-  | { action: 'status' };
+  | { action: 'status' }
+  | { action: 'start-agent'; payload: StartAgentRequestPayload }
+  | { action: 'checkout'; payload: CheckoutRequestPayload }
+  | { action: 'message'; payload: MessageRequestPayload }
+  | { action: 'interrupt'; payload: InterruptRequestPayload };
+
+export interface StartAgentRequestPayload {
+  agentType: string;
+  prompt: string;
+  agentCount?: number;
+  parentSessionId?: string | null;
+  options?: {
+    checkout?: boolean;
+    share?: boolean;
+    detach?: boolean;
+  };
+}
+
+export interface StartAgentResponsePayload {
+  sessionId: string;
+  status: 'active' | 'running' | 'done' | 'failed' | 'interrupted';
+  logPath: string;
+  agentType: string;
+  prompt: string;
+  createdAt: string;
+  instanceId: string;
+}
+
+export interface CheckoutRequestPayload {
+  sessionId?: string;
+  waitSeconds?: number;
+}
+
+export interface MessageRequestPayload {
+  sessionId: string;
+  prompt: string;
+  waitSeconds?: number;
+}
+
+export interface InterruptRequestPayload {
+  sessionId: string;
+  signal?: NodeJS.Signals;
+}
 
 export interface InstanceStatusPayload {
   instanceId: string;
