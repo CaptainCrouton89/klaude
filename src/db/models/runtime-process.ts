@@ -85,24 +85,12 @@ export function createRuntimeProcess(
       clearCurrentRuntimeProcesses(sessionId);
     }
 
-    const insert = db.prepare(
+    const insertWithReturn = db.prepare(
       `INSERT INTO runtime_process (klaude_session_id, pid, kind, is_current)
-       VALUES (?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?)
+       RETURNING *`,
     );
-    insert.run(sessionId, pid, kind, isCurrent ? 1 : 0);
-
-    const idStmt = db.prepare('SELECT last_insert_rowid() AS id');
-    const idRow = idStmt.get() as { id: number } | null;
-    if (!idRow) {
-      throw new DatabaseError('Failed to determine runtime process id');
-    }
-
-    const select = db.prepare(
-      `SELECT *
-       FROM runtime_process
-       WHERE id = ?`,
-    );
-    const row = select.get(idRow.id);
+    const row = insertWithReturn.get(sessionId, pid, kind, isCurrent ? 1 : 0);
     if (!row) {
       throw new DatabaseError('Failed to retrieve newly created runtime process');
     }
