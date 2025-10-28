@@ -1,5 +1,5 @@
 import net from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import type { WriteStream } from 'node:tty';
@@ -33,6 +33,8 @@ import { appendSessionEvent } from '@/utils/logger.js';
 import type {
   InstanceRequest,
   InstanceStatusPayload,
+  CheckoutRequestPayload,
+  CheckoutResponsePayload,
   StartAgentRequestPayload,
   StartAgentResponsePayload,
 } from '@/types/instance-ipc.js';
@@ -223,6 +225,7 @@ function mapExitToStatus(result: ClaudeExitResult): 'done' | 'failed' | 'interru
   return 'failed';
 }
 
+
 export async function startWrapperInstance(options: WrapperStartOptions = {}): Promise<void> {
   const cwd = options.projectCwd ?? process.cwd();
 
@@ -230,12 +233,13 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
   const context = await prepareProjectContext(cwd);
 
   const db = await initializeDatabase();
-  void db; // initialized for side effects
+  void db;
 
   let project = getProjectByHash(context.projectHash);
   if (!project) {
     project = createProject(context.projectRoot, context.projectHash);
   }
+  const projectRecord = project;
 
   const instanceId = generateULID();
   const socketPath = getInstanceSocketPath(
@@ -255,26 +259,57 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     socketPath,
   });
 
-  createInstance(instanceId, project.id, process.pid, ttyPath);
+  createInstance(instanceId, projectRecord.id, process.pid, ttyPath);
 
-  const rootSession = createSession(project.id, 'tui', {
+  const rootSession = createSession(projectRecord.id, 'tui', {
     instanceId,
     title: 'Claude TUI',
     metadataJson: JSON.stringify({ projectRoot: context.projectRoot }),
   });
 
-  const logPath = getSessionLogPath(
+  const wrapperConfig = config.wrapper ?? {};
+  const claudeBinaryConfig = wrapperConfig.claudeBinary;
+  if (!claudeBinaryConfig) {
+    throw new KlaudeError(
+      'Claude binary is not configured. Set wrapper.claudeBinary in ~/.klaude/config.yaml.',
+      'E_CLAUDE_BINARY_MISSING',
+    );
+  }
+  const claudeBinary = claudeBinaryConfig;
+
+  const rootLogPath = getSessionLogPath(
     context.projectHash,
     rootSession.id,
-    config.wrapper?.projectsDir,
+    wrapperConfig.projectsDir,
   );
-  await ensureLogFile(logPath);
+  await ensureLogFile(rootLogPath);
 
   let server: net.Server | null = null;
 
-  let runtimeProcessId: number | null = null;
-  let currentClaudePid: number | null = null;
+  interface PendingSwitch {
+    targetSessionId: string;
+    targetClaudeSessionId: string;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  }
+
+  const graceSeconds = Math.max(0, wrapperConfig.switch?.graceSeconds ?? 1);
+
   let finalized = false;
+
+  const state = {
+    currentSessionId: rootSession.id,
+    currentClaudeProcess: null as ChildProcess | null,
+    currentClaudePid: null as number | null,
+    currentRuntimeProcessId: null as number | null,
+    pendingSwitch: null as PendingSwitch | null,
+    killTimer: null as NodeJS.Timeout | null,
+  };
+
+  let shutdownResolve: (() => void) | null = null;
+  const shutdownPromise = new Promise<void>((resolve) => {
+    shutdownResolve = resolve;
+  });
 
   const normalizeAgentType = (agentType: string): string => agentType.trim().toLowerCase();
 
@@ -307,7 +342,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         'E_SESSION_NOT_FOUND',
       );
     }
-    if (parentSession.project_id !== project.id) {
+    if (parentSession.project_id !== projectRecord.id) {
       throw new KlaudeError(
         `Parent session ${parentSessionId} does not belong to this project`,
         'E_SESSION_PROJECT_MISMATCH',
@@ -323,7 +358,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       options: payload.options ?? {},
     };
 
-    const session = createSession(project.id, 'sdk', {
+    const session = createSession(projectRecord.id, 'sdk', {
       parentId: parentSession.id,
       instanceId,
       title: `${agentType} agent`,
@@ -334,7 +369,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     const sessionLogPath = getSessionLogPath(
       context.projectHash,
       session.id,
-      config.wrapper?.projectsDir,
+      wrapperConfig.projectsDir,
     );
     await ensureLogFile(sessionLogPath);
 
@@ -347,7 +382,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     createEvent(
       'agent.session.created',
-      project.id,
+      projectRecord.id,
       session.id,
       JSON.stringify(eventPayload),
     );
@@ -365,27 +400,394 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     };
   };
 
-  const finalize = async (
+  async function recordSessionEvent(sessionId: string, kind: string, payload: unknown): Promise<void> {
+    createEvent(kind, projectRecord.id, sessionId, JSON.stringify(payload));
+    const sessionLogPath = getSessionLogPath(
+      context.projectHash,
+      sessionId,
+      wrapperConfig.projectsDir,
+    );
+    await ensureLogFile(sessionLogPath);
+    await appendSessionEvent(sessionLogPath, kind, payload);
+  }
+
+  async function waitForClaudeSessionId(
+    sessionId: string,
+    waitSeconds: number,
+  ): Promise<string | null> {
+    const normalizedWait = Number.isFinite(waitSeconds) ? Math.max(0, waitSeconds) : 0;
+    const deadline = Date.now() + normalizedWait * 1000;
+    const pollDelayMs = 200;
+
+    while (true) {
+      const session = getSessionById(sessionId);
+      if (!session) {
+        throw new KlaudeError(`Session ${sessionId} not found`, 'E_SESSION_NOT_FOUND');
+      }
+
+      if (session.last_claude_session_id) {
+        return session.last_claude_session_id;
+      }
+
+      if (normalizedWait === 0 || Date.now() >= deadline) {
+        break;
+      }
+
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, pollDelayMs);
+        if (typeof timer.unref === 'function') {
+          timer.unref();
+        }
+      });
+    }
+
+    return null;
+  }
+
+  function clearKillTimer(): void {
+    if (state.killTimer) {
+      clearTimeout(state.killTimer);
+      state.killTimer = null;
+    }
+  }
+
+  function terminateCurrentClaudeProcess(): void {
+    if (!state.currentClaudeProcess) {
+      return;
+    }
+
+    const processRef = state.currentClaudeProcess;
+    clearKillTimer();
+
+    const graceMs = Math.floor(graceSeconds * 1000);
+    if (graceMs > 0) {
+      const timer = setTimeout(() => {
+        if (!processRef.killed) {
+          processRef.kill('SIGKILL');
+        }
+      }, graceMs);
+      if (typeof timer.unref === 'function') {
+        timer.unref();
+      }
+      state.killTimer = timer;
+    }
+
+    processRef.kill('SIGTERM');
+  }
+
+  async function finalize(
     status: 'done' | 'failed' | 'interrupted',
     exitInfo: ClaudeExitResult | null,
-  ): Promise<void> => {
+  ): Promise<void> {
     if (finalized) {
       return;
     }
     finalized = true;
 
+    clearKillTimer();
+    state.pendingSwitch = null;
+    state.currentClaudeProcess = null;
+    state.currentRuntimeProcessId = null;
+    state.currentClaudePid = null;
+
     updateSessionProcessPid(rootSession.id, null);
     markSessionEnded(rootSession.id, status);
 
-    if (runtimeProcessId !== null && exitInfo) {
-      markRuntimeExited(runtimeProcessId, exitInfo.code ?? 0);
-    }
-
-    currentClaudePid = null;
-
     await markRegistryInstanceEnded(context, instanceId, exitInfo?.code ?? null);
     markInstanceEnded(instanceId, exitInfo?.code ?? null);
-  };
+
+    try {
+      await recordSessionEvent(rootSession.id, 'wrapper.finalized', {
+        status,
+        exitCode: exitInfo?.code ?? null,
+        signal: exitInfo?.signal ?? null,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Unable to record wrapper.finalized event: ${message}`);
+    }
+
+    if (shutdownResolve) {
+      shutdownResolve();
+      shutdownResolve = null;
+    }
+
+    if (exitInfo && exitInfo.code !== null) {
+      process.exitCode = exitInfo.code;
+    } else if (exitInfo && exitInfo.signal) {
+      process.exitCode = 1;
+    } else {
+      process.exitCode = status === 'done' ? 0 : 1;
+    }
+  }
+
+  async function launchClaudeForSession(
+    sessionId: string,
+    options: { resumeClaudeSessionId?: string; sourceSessionId?: string } = {},
+  ): Promise<void> {
+    const args: string[] = [];
+    if (options.resumeClaudeSessionId) {
+      args.push('--resume', options.resumeClaudeSessionId);
+    }
+
+    const env = {
+      ...process.env,
+      KLAUDE_PROJECT_HASH: context.projectHash,
+      KLAUDE_INSTANCE_ID: instanceId,
+      KLAUDE_SESSION_ID: sessionId,
+    };
+
+    const sessionLogPath = getSessionLogPath(
+      context.projectHash,
+      sessionId,
+      wrapperConfig.projectsDir,
+    );
+    await ensureLogFile(sessionLogPath);
+
+    state.currentSessionId = sessionId;
+
+    let claudeProcess: ChildProcess;
+    try {
+      claudeProcess = spawn(claudeBinary, args, {
+        cwd: context.projectRoot,
+        env,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      throw new KlaudeError(
+        `Failed to launch Claude binary: ${(error as Error).message}`,
+        'E_CLAUDE_LAUNCH_FAILED',
+      );
+    }
+
+    state.currentClaudeProcess = claudeProcess;
+    state.currentClaudePid = null;
+
+    claudeProcess.once('spawn', () => {
+      updateSessionStatus(sessionId, 'running');
+      if (claudeProcess.pid) {
+        updateSessionProcessPid(sessionId, claudeProcess.pid);
+        state.currentClaudePid = claudeProcess.pid;
+        const runtimeProcess = createRuntimeProcess(sessionId, claudeProcess.pid, 'claude', true);
+        state.currentRuntimeProcessId = runtimeProcess.id;
+      } else {
+        state.currentRuntimeProcessId = null;
+      }
+
+      const payload = {
+        pid: claudeProcess.pid,
+        resumeSessionId: options.resumeClaudeSessionId ?? null,
+        sourceSessionId: options.sourceSessionId ?? null,
+      };
+      createEvent(
+        'wrapper.claude.spawned',
+        projectRecord.id,
+        sessionId,
+        JSON.stringify(payload),
+      );
+      void appendSessionEvent(sessionLogPath, 'wrapper.claude.spawned', payload);
+    });
+
+    claudeProcess.once('exit', (code, signal) => {
+      void handleClaudeExit(sessionId, { code, signal });
+    });
+
+    claudeProcess.once('error', (error) => {
+      void handleClaudeError(sessionId, error as Error);
+    });
+  }
+
+  async function handleClaudeExit(sessionId: string, exitResult: ClaudeExitResult): Promise<void> {
+    clearKillTimer();
+
+    const runtimeProcessId = state.currentRuntimeProcessId;
+    state.currentRuntimeProcessId = null;
+    state.currentClaudeProcess = null;
+    state.currentClaudePid = null;
+
+    updateSessionProcessPid(sessionId, null);
+    if (runtimeProcessId !== null) {
+      markRuntimeExited(runtimeProcessId, exitResult.code ?? 0);
+    }
+
+    const switching = state.pendingSwitch !== null;
+    const mappedStatus = mapExitToStatus(exitResult);
+
+    if (switching) {
+      updateSessionStatus(sessionId, 'active');
+    } else {
+      updateSessionStatus(sessionId, mappedStatus);
+      if (mappedStatus === 'done' || mappedStatus === 'failed' || mappedStatus === 'interrupted') {
+        markSessionEnded(sessionId, mappedStatus);
+      }
+    }
+
+    const payload = {
+      sessionId,
+      code: exitResult.code,
+      signal: exitResult.signal,
+      switching,
+    };
+    await recordSessionEvent(sessionId, 'wrapper.claude.exited', payload);
+
+    if (switching) {
+      const switchInfo = state.pendingSwitch!;
+      state.pendingSwitch = null;
+      try {
+        await launchClaudeForSession(switchInfo.targetSessionId, {
+          resumeClaudeSessionId: switchInfo.targetClaudeSessionId,
+          sourceSessionId: sessionId,
+        });
+        await recordSessionEvent(switchInfo.targetSessionId, 'wrapper.checkout.activated', {
+          fromSessionId: sessionId,
+          resumeSessionId: switchInfo.targetClaudeSessionId,
+        });
+        switchInfo.resolve();
+      } catch (error) {
+        switchInfo.reject(error);
+        await finalize('failed', exitResult);
+      }
+      return;
+    }
+
+    await finalize(mappedStatus, exitResult);
+  }
+
+  async function handleClaudeError(sessionId: string, error: Error): Promise<void> {
+    clearKillTimer();
+
+    const runtimeProcessId = state.currentRuntimeProcessId;
+    state.currentRuntimeProcessId = null;
+    state.currentClaudeProcess = null;
+    state.currentClaudePid = null;
+
+    updateSessionProcessPid(sessionId, null);
+    updateSessionStatus(sessionId, 'failed');
+    markSessionEnded(sessionId, 'failed');
+
+    if (runtimeProcessId !== null) {
+      markRuntimeExited(runtimeProcessId, 1);
+    }
+
+    await recordSessionEvent(sessionId, 'wrapper.claude.error', {
+      message: error.message,
+    });
+
+    if (state.pendingSwitch) {
+      const pending = state.pendingSwitch;
+      state.pendingSwitch = null;
+      pending.reject(error);
+    }
+
+    await finalize('failed', null);
+  }
+
+  async function handleCheckout(
+    payload: CheckoutRequestPayload,
+  ): Promise<CheckoutResponsePayload> {
+    if (state.pendingSwitch) {
+      throw new KlaudeError('A checkout is already in progress', 'E_CHECKOUT_IN_PROGRESS');
+    }
+
+    const waitSecondsRaw =
+      payload.waitSeconds === undefined || payload.waitSeconds === null
+        ? 0
+        : Number(payload.waitSeconds);
+    if (Number.isNaN(waitSecondsRaw)) {
+      throw new KlaudeError('Wait value must be numeric', 'E_INVALID_WAIT_VALUE');
+    }
+    const waitSeconds = Math.max(0, waitSecondsRaw);
+
+    const currentSessionId = state.currentSessionId;
+    const currentSession = getSessionById(currentSessionId);
+    if (!currentSession) {
+      throw new KlaudeError(
+        `Current session ${currentSessionId} not found`,
+        'E_SESSION_NOT_FOUND',
+      );
+    }
+
+    const requestedId =
+      typeof payload.sessionId === 'string' && payload.sessionId.trim().length > 0
+        ? payload.sessionId.trim()
+        : null;
+
+    const targetSessionId = requestedId ?? currentSession.parent_id;
+    if (!targetSessionId) {
+      throw new KlaudeError(
+        'Current session has no parent; specify a session id explicitly',
+        'E_SWITCH_TARGET_MISSING',
+      );
+    }
+
+    const targetSession = getSessionById(targetSessionId);
+    if (!targetSession) {
+      throw new KlaudeError(
+        `Session ${targetSessionId} not found`,
+        'E_SESSION_NOT_FOUND',
+      );
+    }
+    if (targetSession.project_id !== projectRecord.id) {
+      throw new KlaudeError(
+        `Session ${targetSessionId} does not belong to this project`,
+        'E_SESSION_PROJECT_MISMATCH',
+      );
+    }
+
+    const claudeSessionId =
+      targetSession.last_claude_session_id ??
+      (await waitForClaudeSessionId(targetSession.id, waitSeconds));
+
+    if (!claudeSessionId) {
+      throw new KlaudeError(
+        `Target session ${targetSessionId} does not have a Claude session id`,
+        'E_SWITCH_TARGET_MISSING',
+      );
+    }
+
+    if (targetSessionId === currentSessionId && state.currentClaudeProcess) {
+      return {
+        sessionId: targetSessionId,
+        claudeSessionId,
+      };
+    }
+
+    await recordSessionEvent(currentSessionId, 'wrapper.checkout.requested', {
+      targetSessionId,
+      waitSeconds,
+    });
+
+    if (!state.currentClaudeProcess) {
+      await launchClaudeForSession(targetSessionId, {
+        resumeClaudeSessionId: claudeSessionId,
+        sourceSessionId: currentSessionId,
+      });
+      await recordSessionEvent(targetSessionId, 'wrapper.checkout.activated', {
+        fromSessionId: currentSessionId,
+        resumeSessionId: claudeSessionId,
+      });
+      return {
+        sessionId: targetSessionId,
+        claudeSessionId,
+      };
+    }
+
+    return await new Promise<CheckoutResponsePayload>((resolve, reject) => {
+      state.pendingSwitch = {
+        targetSessionId,
+        targetClaudeSessionId: claudeSessionId,
+        resolve: () => resolve({ sessionId: targetSessionId, claudeSessionId }),
+        reject,
+      };
+
+      try {
+        terminateCurrentClaudeProcess();
+      } catch (error) {
+        state.pendingSwitch = null;
+        reject(error);
+      }
+    });
+  }
 
   try {
     const requestHandler: InstanceRequestHandler = async (request) => {
@@ -396,10 +798,10 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
             timestamp: new Date().toISOString(),
           };
         case 'status': {
-          const session = getSessionById(rootSession.id);
+          const session = getSessionById(state.currentSessionId);
           if (!session) {
             throw new KlaudeError(
-              'Root session not found for wrapper instance',
+              'Active session not found for wrapper instance',
               'E_SESSION_NOT_FOUND',
             );
           }
@@ -410,7 +812,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
             projectRoot: context.projectRoot,
             rootSessionId: rootSession.id,
             sessionStatus: session.status,
-            claudePid: currentClaudePid,
+            claudePid: state.currentClaudePid,
             updatedAt: session.updated_at ?? session.created_at,
           };
           return payload;
@@ -418,7 +820,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         case 'start-agent':
           return await handleStartAgent(request.payload);
         case 'checkout':
-          throw new KlaudeError('Checkout is not implemented yet', 'E_CHECKOUT_UNAVAILABLE');
+          return await handleCheckout(request.payload);
         case 'message':
           throw new KlaudeError('Messaging is not implemented yet', 'E_MESSAGE_UNAVAILABLE');
         case 'interrupt':
@@ -433,84 +835,21 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     server = await startInstanceServer(socketPath, requestHandler);
 
-    const claudeBinary = config.wrapper?.claudeBinary;
-    if (!claudeBinary) {
-      throw new KlaudeError(
-        'Claude binary is not configured. Set wrapper.claudeBinary in ~/.klaude/config.yaml.',
-        'E_CLAUDE_BINARY_MISSING',
-      );
-    }
+    await recordSessionEvent(rootSession.id, 'wrapper.start', { instanceId });
 
-    const startPayload = { instanceId };
-    createEvent(
-      'wrapper.start',
-      project.id,
-      rootSession.id,
-      JSON.stringify(startPayload),
-    );
-    await appendSessionEvent(logPath, 'wrapper.start', startPayload);
+    await launchClaudeForSession(rootSession.id);
 
-    const env = {
-      ...process.env,
-      KLAUDE_PROJECT_HASH: context.projectHash,
-      KLAUDE_INSTANCE_ID: instanceId,
-      KLAUDE_SESSION_ID: rootSession.id,
-    };
-
-    const claudeProcess = spawn(claudeBinary, [], {
-      cwd: context.projectRoot,
-      env,
-      stdio: 'inherit',
-    });
-
-    claudeProcess.once('spawn', async () => {
-      updateSessionStatus(rootSession.id, 'running');
-      if (claudeProcess.pid) {
-        updateSessionProcessPid(rootSession.id, claudeProcess.pid);
-        const runtimeProcess = createRuntimeProcess(rootSession.id, claudeProcess.pid, 'claude', true);
-        runtimeProcessId = runtimeProcess.id;
-        currentClaudePid = claudeProcess.pid;
-      }
-      const spawnPayload = { pid: claudeProcess.pid };
-      createEvent(
-        'wrapper.claude.spawned',
-        project.id,
-        rootSession.id,
-        JSON.stringify(spawnPayload),
-      );
-      await appendSessionEvent(logPath, 'wrapper.claude.spawned', spawnPayload);
-    });
-
-    let exitResult: ClaudeExitResult | null = null;
-
-    exitResult = await new Promise<ClaudeExitResult>((resolve, reject) => {
-      claudeProcess.once('exit', (code, signal) => resolve({ code, signal }));
-      claudeProcess.once('error', reject);
-    });
-
-    const sessionStatus = mapExitToStatus(exitResult);
-    await finalize(sessionStatus, exitResult);
-
-    createEvent(
-      'wrapper.claude.exited',
-      project.id,
-      rootSession.id,
-      JSON.stringify(exitResult),
-    );
-    await appendSessionEvent(logPath, 'wrapper.claude.exited', exitResult);
-
-    process.exitCode = exitResult.code ?? (exitResult.signal ? 1 : 0);
+    await shutdownPromise;
   } catch (error) {
-    await finalize('failed', null);
-    const errorPayload = { message: (error as Error).message };
-    createEvent(
-      'wrapper.claude.error',
-      project.id,
-      rootSession.id,
-      JSON.stringify(errorPayload),
-    );
-    await appendSessionEvent(logPath, 'wrapper.claude.error', errorPayload);
-    process.exitCode = 1;
+    if (!finalized) {
+      await finalize('failed', null);
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      await recordSessionEvent(rootSession.id, 'wrapper.claude.error', { message });
+    } catch {
+      // ignore logging failures on shutdown
+    }
     throw error;
   } finally {
     if (server) {
