@@ -207,3 +207,69 @@ export function updateSessionClaudeLink(
     throw new DatabaseError(`Unable to update session Claude link: ${message}`);
   }
 }
+
+export function getChildSessions(parentId: string): Session[] {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `SELECT *
+       FROM sessions
+       WHERE parent_id = ?
+       ORDER BY created_at DESC`,
+    );
+    const rows = stmt.all(parentId) as unknown[];
+    return rows.map(mapRowToSession);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to get child sessions: ${message}`);
+  }
+}
+
+export function markSessionOrphaned(sessionId: string): void {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare(
+      `UPDATE sessions
+       SET status = 'orphaned',
+           ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    );
+    stmt.run(sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to mark session orphaned: ${message}`);
+  }
+}
+
+export function cascadeMarkSessionEnded(sessionId: string, status: SessionStatus): void {
+  try {
+    const db = getDatabase();
+
+    // Get child sessions before marking parent as ended
+    const children = getChildSessions(sessionId);
+
+    // Mark the parent session as ended
+    const parentStmt = db.prepare(
+      `UPDATE sessions
+       SET status = ?,
+           ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    );
+    parentStmt.run(status, sessionId);
+
+    // Mark all children as orphaned
+    const orphanStmt = db.prepare(
+      `UPDATE sessions
+       SET status = 'orphaned',
+           ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE parent_id = ?`,
+    );
+    orphanStmt.run(sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to cascade mark session ended: ${message}`);
+  }
+}
