@@ -362,12 +362,13 @@ async function run(): Promise<void> {
           emit({ type: 'log', level: 'info', message: `Received message: ${parsed.prompt.slice(0, 50)}...` });
 
           try {
-            // Continue the conversation with the new message
+            // Continue the exact same Claude session using explicit resume
             const continuedStream = queryFn({
               prompt: parsed.prompt,
               options: {
                 ...options,
-                continue: true,
+                resume: currentSessionId,
+                forkSession: false,
               },
             });
 

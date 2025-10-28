@@ -15,6 +15,7 @@ import {
   createRuntimeProcess,
   createSession,
   getClaudeSessionLink,
+  listClaudeSessionLinks,
   getProjectByHash,
   getSessionById,
   initializeDatabase,
@@ -797,6 +798,40 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     return null;
   }
 
+  async function waitForActiveClaudeSessionId(
+    klaudeSessionId: string,
+    waitSeconds: number,
+  ): Promise<string | null> {
+    const normalizedWait = Number.isFinite(waitSeconds) ? Math.max(0, waitSeconds) : 0;
+    const deadline = Date.now() + normalizedWait * 1000;
+    const pollDelayMs = 200;
+
+    while (true) {
+      try {
+        const links = listClaudeSessionLinks(klaudeSessionId);
+        const active = links.find((l) => l.ended_at === null);
+        if (active) {
+          return active.claude_session_id;
+        }
+      } catch {
+        // ignore errors and continue waiting
+      }
+
+      if (normalizedWait === 0 || Date.now() >= deadline) {
+        break;
+      }
+
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, pollDelayMs);
+        if (typeof timer.unref === 'function') {
+          timer.unref();
+        }
+      });
+    }
+
+    return null;
+  }
+
   function clearKillTimer(): void {
     if (state.killTimer) {
       clearTimeout(state.killTimer);
@@ -1077,6 +1112,9 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     debugLog(`[message-request] sessionId=${payload.sessionId}, prompt="${payload.prompt.slice(0, 50)}..."`);
 
     let runtime = agentRuntimes.get(payload.sessionId);
+    const waitSeconds = typeof payload.waitSeconds === 'number' && isFinite(payload.waitSeconds)
+      ? Math.max(0, payload.waitSeconds)
+      : 5;
 
     // If no runtime is active, attempt to start one resuming the prior Claude session
     if (!runtime) {
@@ -1104,8 +1142,42 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         // ignore metadata parse errors; fallback to 'sdk'
       }
 
-      // Use the last known Claude session id, if any, so the message continues the same transcript
-      const resumeId = session.last_claude_session_id ?? null;
+      // Prefer most recent active Claude session link, else latest link, else session.last_claude_session_id.
+      // If none is yet known, wait briefly for hooks/SDK events to populate to avoid forking a new conversation.
+      let resumeId: string | null = session.last_claude_session_id ?? null;
+      let messageSelectionReason = 'unknown';
+      try {
+        const links = listClaudeSessionLinks(payload.sessionId);
+        const active = links.find((l) => l.ended_at === null);
+        if (active) {
+          resumeId = active.claude_session_id;
+          messageSelectionReason = 'active_link';
+        } else if (links.length > 0) {
+          resumeId = links[0]!.claude_session_id;
+          messageSelectionReason = 'latest_link';
+        } else {
+          messageSelectionReason = 'cached';
+        }
+      } catch {
+        // ignore link lookup failures
+      }
+
+      // If we still don't have a resume id, wait briefly for an active link or session record
+      if (!resumeId && waitSeconds > 0) {
+        const activeId = await waitForActiveClaudeSessionId(payload.sessionId, waitSeconds);
+        if (activeId) {
+          resumeId = activeId;
+          messageSelectionReason = messageSelectionReason === 'unknown' ? 'waited_active' : `${messageSelectionReason}+waited_active`;
+        }
+      }
+
+      if (!resumeId && waitSeconds > 0) {
+        const lastId = await waitForClaudeSessionId(payload.sessionId, waitSeconds);
+        if (lastId) {
+          resumeId = lastId;
+          messageSelectionReason = messageSelectionReason === 'unknown' ? 'waited_last' : `${messageSelectionReason}+waited_last`;
+        }
+      }
 
       // Launch a runtime for this existing session, using the incoming message as the initial prompt
       await startAgentRuntimeProcess(session as ReturnType<typeof createSession>, derivedAgentType, {
@@ -1119,6 +1191,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       await recordSessionEvent(payload.sessionId, 'agent.message.runtime_started', {
         resumed: Boolean(resumeId),
         resumeClaudeSessionId: resumeId,
+        selectionReason: messageSelectionReason,
       });
 
       // Since the initial prompt was passed to the runtime init, we do not need to write again here.
@@ -1264,16 +1337,57 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     }
 
     const claudeSessionStart = Date.now();
+    // Prefer the most recent active Claude session link if present
     let claudeSessionId = targetSession.last_claude_session_id;
+    let selectionReason: string = 'unknown';
+    try {
+      const links = listClaudeSessionLinks(targetSessionId);
+      const active = links.find((l) => l.ended_at === null);
+      if (active) {
+        claudeSessionId = active.claude_session_id;
+        debugLog(`[checkout-link] Using active link ${claudeSessionId}`);
+        selectionReason = 'active_link';
+      } else if (links.length > 0) {
+        claudeSessionId = links[0]!.claude_session_id;
+        debugLog(`[checkout-link] Using latest link ${claudeSessionId}`);
+        selectionReason = 'latest_link';
+      }
+    } catch (err) {
+      // If link lookup fails, fall back to last_claude_session_id and standard wait logic
+      const msg = err instanceof Error ? err.message : String(err);
+      debugLog(`[checkout-link-error] ${msg}`);
+    }
     if (!claudeSessionId) {
-      debugLog(
-        `[checkout-wait] Waiting up to ${waitSeconds}s for Claude session ID...`,
-      );
-      claudeSessionId = await waitForClaudeSessionId(targetSession.id, waitSeconds);
+      // First, wait for an active link to appear (e.g., from a resume hook)
+      debugLog(`[checkout-wait] Waiting up to ${waitSeconds}s for active link...`);
+      claudeSessionId = await waitForActiveClaudeSessionId(targetSession.id, waitSeconds);
+      if (claudeSessionId) {
+        selectionReason = selectionReason === 'unknown' ? 'waited_active' : `${selectionReason}+waited_active`;
+      }
+      if (!claudeSessionId) {
+        // Fallback to waiting for last_claude_session_id (SDK runtime will update this)
+        debugLog(`[checkout-wait] Active link not found, waiting for last_claude_session_id...`);
+        claudeSessionId = await waitForClaudeSessionId(targetSession.id, waitSeconds);
+        if (claudeSessionId) {
+          selectionReason = selectionReason === 'unknown' ? 'waited_last' : `${selectionReason}+waited_last`;
+        }
+      }
       const waitElapsed = Date.now() - claudeSessionStart;
       debugLog(`[checkout-wait-done] elapsed=${waitElapsed}ms, found=${claudeSessionId !== null}`);
     } else {
       debugLog(`[checkout-cached] Using cached Claude session ID`);
+      if (waitSeconds > 0) {
+        const activeId = await waitForActiveClaudeSessionId(targetSession.id, waitSeconds);
+        if (activeId && activeId !== claudeSessionId) {
+          debugLog(`[checkout-active] Found newer active link ${activeId}, superseding cached ${claudeSessionId}`);
+          claudeSessionId = activeId;
+          selectionReason = selectionReason === 'unknown' ? 'waited_active_supersede' : `${selectionReason}+waited_active_supersede`;
+        } else if (selectionReason === 'unknown') {
+          selectionReason = 'cached';
+        }
+      } else if (selectionReason === 'unknown') {
+        selectionReason = 'cached';
+      }
     }
 
     if (!claudeSessionId) {
@@ -1282,6 +1396,13 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         'E_SWITCH_TARGET_MISSING',
       );
     }
+
+    // Record explicit resume selection for traceability
+    await recordSessionEvent(targetSessionId, 'wrapper.checkout.resume_selected', {
+      selectedResumeId: claudeSessionId,
+      selectionReason,
+      waitSeconds,
+    });
 
     if (targetSessionId === currentSessionId && state.currentClaudeProcess) {
       // Already on target session; no action needed

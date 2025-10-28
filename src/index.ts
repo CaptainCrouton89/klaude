@@ -293,7 +293,10 @@ program
         throw new KlaudeError(response.error.message, response.error.code);
       }
 
-      console.log('Checkout request sent to wrapper instance.');
+      const result = response.result as { sessionId: string; claudeSessionId: string };
+      console.log(
+        `Checkout activated for session ${result.sessionId} (resume ${result.claudeSessionId}).`,
+      );
     } catch (error) {
       printError(error);
       process.exitCode = process.exitCode ?? 1;
