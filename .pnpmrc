@@ -1,0 +1,5 @@
+shamefully-hoist=true
+# Auto-approve build scripts for native modules
+unsafe-perm=true
+auto-install-peers=true
+scripts-prepend-node-path=true

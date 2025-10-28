@@ -1,189 +1,134 @@
 /**
- * SQLite database implementation using sql.js with persistence to disk
+ * SQLite database implementation using better-sqlite3 for shared on-disk access.
+ * Maintains a single connection per process while relying on WAL mode for
+ * cross-process concurrency (hooks, wrapper instances, CLI commands).
  */
+
+import { existsSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+import DatabaseConstructor, {
+  type Database as BetterSqliteDatabase,
+  type Statement as BetterSqliteStatement,
+} from 'better-sqlite3';
 
 import { getDbPath } from '@/utils/path-helper.js';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import path from 'path';
-import initSqlJs, { Database as SqlJsDatabase, Statement as SqlJsStatement } from 'sql.js';
 
 /**
- * Database statement wrapper
+ * Database statement wrapper exposing the minimal interface used by the data layer.
  */
 class DatabaseStatement {
-  constructor(
-    private stmt: SqlJsStatement,
-    private db: SqlJsDatabase,
-    private onSave?: () => void
-  ) {}
+  constructor(private stmt: BetterSqliteStatement) {}
 
   run(...params: unknown[]): { changes: number } {
     try {
-      // Reset statement to clear any previous bindings
-      this.stmt.reset();
-
-      // Bind parameters
-      this.stmt.bind(params as Parameters<typeof this.stmt.bind>[0]);
-
-      // Execute the statement
-      this.stmt.step();
-
-      // Get changes before freeing
-      const changes = this.db.getRowsModified();
-
-      // Reset and free the statement
-      this.stmt.reset();
-      this.stmt.free();
-
-      // Persist changes to disk if save callback provided
-      if (this.onSave && changes > 0) {
-        this.onSave();
-      }
-
-      return { changes };
+      const result = this.stmt.run(...(params as Parameters<typeof this.stmt.run>));
+      return { changes: typeof result.changes === 'number' ? result.changes : 0 };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to execute statement: ${errorMessage}`);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to execute statement: ${message}`);
     }
   }
 
   get(...params: unknown[]): unknown {
     try {
-      this.stmt.reset();
-      this.stmt.bind(params as Parameters<typeof this.stmt.bind>[0]);
-      const result = this.stmt.step() ? this.stmt.getAsObject() : null;
-      this.stmt.reset();
-      this.stmt.free();
-      return result;
+      return this.stmt.get(...(params as Parameters<typeof this.stmt.get>)) ?? null;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to fetch row: ${errorMessage}`);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to fetch row: ${message}`);
     }
   }
 
   all(...params: unknown[]): unknown[] {
     try {
-      this.stmt.reset();
-      this.stmt.bind(params as Parameters<typeof this.stmt.bind>[0]);
-      const results: unknown[] = [];
-      while (this.stmt.step()) {
-        results.push(this.stmt.getAsObject());
-      }
-      this.stmt.reset();
-      this.stmt.free();
-      return results;
+      return this.stmt.all(...(params as Parameters<typeof this.stmt.all>));
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to fetch rows: ${errorMessage}`);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to fetch rows: ${message}`);
     }
   }
 }
 
 /**
- * Database wrapper
+ * Thin wrapper over better-sqlite3 to provide the previous sql.js-style API.
  */
 class Database {
-  constructor(private db: SqlJsDatabase, private dbPath: string) {}
+  constructor(private db: BetterSqliteDatabase) {}
 
   prepare(sql: string): DatabaseStatement {
     try {
-      const stmt = this.db.prepare(sql);
-      // Return a statement that will save after execution
-      return new DatabaseStatement(stmt, this.db, () => this.save());
+      return new DatabaseStatement(this.db.prepare(sql));
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to prepare statement: ${errorMessage}`);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to prepare statement: ${message}`);
     }
   }
 
   run(sql: string): void {
     try {
-      this.db.run(sql);
-      this.save();
+      this.db.exec(sql);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to execute SQL: ${errorMessage}`);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to execute SQL: ${message}`);
     }
   }
 
   exec(sql: string): void {
     try {
       this.db.exec(sql);
-      this.save();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to execute batch SQL: ${errorMessage}`);
-    }
-  }
-
-  private save(): void {
-    try {
-      const data = this.db.export();
-      const buffer = Buffer.from(data);
-      writeFileSync(this.dbPath, buffer);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to save database: ${errorMessage}`);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to execute batch SQL: ${message}`);
     }
   }
 
   close(): void {
     try {
-      this.save();
       this.db.close();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to close database: ${errorMessage}`);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to close database: ${message}`);
     }
   }
 }
 
 let dbInstance: Database | null = null;
-let sqlJsInstance: Awaited<ReturnType<typeof initSqlJs>> | null = null;
 
 /**
- * Initialize and get database connection
+ * Initialize and return the shared database connection.
  */
 export async function initializeDatabase(): Promise<Database> {
-  if (dbInstance) return dbInstance;
+  if (dbInstance) {
+    return dbInstance;
+  }
 
   try {
     const dbPath = getDbPath();
     const dbDir = path.dirname(dbPath);
 
-    // Create directory if it doesn't exist
     if (!existsSync(dbDir)) {
       mkdirSync(dbDir, { recursive: true });
     }
 
-    // Initialize sql.js
-    if (!sqlJsInstance) {
-      sqlJsInstance = await initSqlJs();
-    }
+    const sqliteDb = new DatabaseConstructor(dbPath, {
+      fileMustExist: false,
+      timeout: 5000,
+    });
 
-    // Load existing database or create new one
-    let data: Uint8Array | undefined;
-    if (existsSync(dbPath)) {
-      data = new Uint8Array(readFileSync(dbPath));
-    }
+    // Enable WAL + tuned sync level up front for every connection.
+    sqliteDb.pragma('journal_mode = WAL');
+    sqliteDb.pragma('synchronous = NORMAL');
 
-    const sqlJsDb = new sqlJsInstance.Database(data);
-    dbInstance = new Database(sqlJsDb, dbPath);
-
-    // Initialize schema
+    dbInstance = new Database(sqliteDb);
     initializeSchema(dbInstance);
-
     return dbInstance;
   } catch (error) {
-    if (error instanceof Error) {
-      throw new Error(`Failed to initialize database: ${error.message}`);
-    }
-    throw new Error(`Failed to initialize database: ${String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to initialize database: ${message}`);
   }
 }
 
 /**
- * Get existing database connection
+ * Return the active database connection or throw if it has not been initialized.
  */
 export function getDatabase(): Database {
   if (!dbInstance) {
@@ -193,8 +138,7 @@ export function getDatabase(): Database {
 }
 
 /**
- * Close database connection
- * Note: Errors during close are logged but not thrown to ensure graceful shutdown
+ * Close the database connection for the current process.
  */
 export function closeDatabase(): void {
   if (!dbInstance) {
@@ -203,30 +147,22 @@ export function closeDatabase(): void {
 
   try {
     dbInstance.close();
-    dbInstance = null;
   } catch (error) {
-    // Extract error message and log it
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    const fullMessage = `Error closing database: ${errorMessage}`;
-    console.error(fullMessage);
-
-    // Ensure we clear the instance even if close fails
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Error closing database: ${message}`);
+  } finally {
     dbInstance = null;
-
-    // Log but don't re-throw - graceful shutdown is more important than propagating close errors
   }
 }
 
 /**
- * Create database schema
+ * Create database schema and indexes if they do not exist.
  */
 function initializeSchema(db: Database): void {
   try {
-    // Set WAL mode and synchronous mode for better concurrency
     db.run('PRAGMA journal_mode = WAL;');
     db.run('PRAGMA synchronous = NORMAL;');
 
-    // Create projects table
     db.exec(`
       CREATE TABLE IF NOT EXISTS projects (
         id INTEGER PRIMARY KEY,
@@ -236,7 +172,6 @@ function initializeSchema(db: Database): void {
       );
     `);
 
-    // Create instances table
     db.exec(`
       CREATE TABLE IF NOT EXISTS instances (
         instance_id TEXT PRIMARY KEY,
@@ -252,7 +187,6 @@ function initializeSchema(db: Database): void {
 
     db.run('CREATE INDEX IF NOT EXISTS idx_instances_project ON instances(project_id);');
 
-    // Create sessions table
     db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
@@ -277,7 +211,6 @@ function initializeSchema(db: Database): void {
     db.run('CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_id);');
     db.run('CREATE INDEX IF NOT EXISTS idx_sessions_instance ON sessions(instance_id);');
 
-    // Create claude_session_links table
     db.exec(`
       CREATE TABLE IF NOT EXISTS claude_session_links (
         id INTEGER PRIMARY KEY,
@@ -292,7 +225,6 @@ function initializeSchema(db: Database): void {
 
     db.run('CREATE INDEX IF NOT EXISTS idx_csl_klaude ON claude_session_links(klaude_session_id);');
 
-    // Create runtime_process table
     db.exec(`
       CREATE TABLE IF NOT EXISTS runtime_process (
         id INTEGER PRIMARY KEY,
@@ -308,7 +240,6 @@ function initializeSchema(db: Database): void {
 
     db.run('CREATE INDEX IF NOT EXISTS idx_runtime_klaude ON runtime_process(klaude_session_id);');
 
-    // Create events table
     db.exec(`
       CREATE TABLE IF NOT EXISTS events (
         id INTEGER PRIMARY KEY,
@@ -322,7 +253,8 @@ function initializeSchema(db: Database): void {
 
     db.run('CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);');
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to initialize database schema: ${errorMessage}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to initialize database schema: ${message}`);
   }
 }
+
