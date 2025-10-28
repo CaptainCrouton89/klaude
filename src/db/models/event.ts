@@ -34,24 +34,12 @@ export function createEvent(
 ): Event {
   try {
     const db = getDatabase();
-    const insert = db.prepare(
+    const insertWithReturn = db.prepare(
       `INSERT INTO events (project_id, klaude_session_id, kind, payload_json)
-       VALUES (?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?)
+       RETURNING *`,
     );
-    insert.run(projectId ?? null, sessionId ?? null, kind, payloadJson ?? null);
-
-    const idStmt = db.prepare('SELECT last_insert_rowid() AS id');
-    const idRow = idStmt.get() as { id: number } | null;
-    if (!idRow) {
-      throw new DatabaseError('Failed to determine event id');
-    }
-
-    const select = db.prepare(
-      `SELECT *
-       FROM events
-       WHERE id = ?`,
-    );
-    const row = select.get(idRow.id);
+    const row = insertWithReturn.get(projectId ?? null, sessionId ?? null, kind, payloadJson ?? null);
     if (!row) {
       throw new DatabaseError('Failed to retrieve newly created event');
     }
