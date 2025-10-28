@@ -193,7 +193,7 @@ program
       }
       // Attach to live log stream unless explicitly detached or we just checked out
       if (!payload.options?.detach && !payload.options?.checkout) {
-        await tailSessionLog(result.logPath, { untilExit: true });
+        await tailSessionLog(result.logPath, { untilExit: true, verbose: false });
       }
     } catch (error) {
       printError(error);
@@ -455,6 +455,7 @@ program
   .argument('<sessionId>', 'Session id to read')
   .option('-t, --tail', 'Tail the log continuously')
   .option('-s, --summary', 'Print a brief summary instead of full log')
+  .option('-v, --verbose', 'Verbose: print raw JSON events (default prints assistant text only)')
   .option('--instance <id>', 'Target instance id for live tailing')
   .option('-C, --cwd <path>', 'Project directory override')
   .action(async (sessionId: string, options) => {
@@ -475,18 +476,22 @@ program
 
       try {
         if (options.tail) {
-          await tailSessionLog(logPath, { untilExit: false });
+          await tailSessionLog(logPath, { untilExit: false, verbose: Boolean(options.verbose) });
         } else if (options.summary) {
           await printSessionSummary(logPath);
         } else {
-          const content = await fsp.readFile(logPath, 'utf-8');
-          if (content.length === 0) {
-            console.log('(log is empty)');
-          } else {
-            process.stdout.write(content);
-            if (!content.endsWith('\n')) {
-              process.stdout.write('\n');
+          if (options.verbose) {
+            const content = await fsp.readFile(logPath, 'utf-8');
+            if (content.length === 0) {
+              console.log('(log is empty)');
+            } else {
+              process.stdout.write(content);
+              if (!content.endsWith('\n')) {
+                process.stdout.write('\n');
+              }
             }
+          } else {
+            await printAssistantTranscript(logPath);
           }
         }
       } catch (error) {
@@ -528,7 +533,7 @@ program.parseAsync(process.argv).catch((error) => {
 
 async function tailSessionLog(
   logPath: string,
-  options: { untilExit: boolean },
+  options: { untilExit: boolean; verbose?: boolean },
 ): Promise<void> {
   // Print existing content first
   let position = 0;
@@ -571,6 +576,46 @@ async function tailSessionLog(
     return false;
   };
 
+  // State for pretty printing assistant text only
+  const verbose = Boolean(options.verbose);
+  let printedStream = false;
+
+  const handleLine = (line: string): void => {
+    if (verbose) {
+      process.stdout.write(line + '\n');
+      return;
+    }
+    try {
+      const obj = JSON.parse(line) as { kind?: string; payload?: any };
+      if (obj.kind === 'agent.runtime.message') {
+        const mt = obj.payload?.messageType as string | undefined;
+        const text = typeof obj.payload?.text === 'string' ? obj.payload.text : '';
+        if (mt === 'stream_event') {
+          if (text) {
+            process.stdout.write(text);
+            printedStream = true;
+          }
+          return;
+        }
+        if (mt === 'assistant') {
+          if (!printedStream && text) {
+            process.stdout.write(text + '\n');
+          }
+          return;
+        }
+      }
+      if (obj.kind === 'agent.runtime.result') {
+        if (printedStream) {
+          process.stdout.write('\n');
+          printedStream = false;
+        }
+        return;
+      }
+    } catch {
+      // ignore parse errors in non-verbose mode
+    }
+  };
+
   const readChunk = async (): Promise<void> => {
     try {
       const fh = await (await import('node:fs/promises')).open(logPath, 'r');
@@ -585,7 +630,7 @@ async function tailSessionLog(
         const lines = text.split('\n');
         for (const line of lines) {
           if (!line) continue;
-          process.stdout.write(line + '\n');
+          handleLine(line);
           if (options.untilExit && isTerminalEvent(line)) {
             stop();
           }
@@ -702,6 +747,29 @@ async function printSessionSummary(logPath: string): Promise<void> {
   if (updatedAt) console.log(`updated: ${updatedAt}`);
   if (resumeIds.size > 0) console.log(`resume_ids: ${Array.from(resumeIds).join(', ')}`);
   if (lastText) console.log(`last_text: ${lastText}`);
+}
+
+async function printAssistantTranscript(logPath: string): Promise<void> {
+  const content = await fsp.readFile(logPath, 'utf-8');
+  if (!content.trim()) {
+    console.log('(log is empty)');
+    return;
+  }
+  const lines = content.split('\n').filter(Boolean);
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line) as { kind?: string; payload?: any };
+      if (obj.kind === 'agent.runtime.message') {
+        const mt = obj.payload?.messageType as string | undefined;
+        const text = typeof obj.payload?.text === 'string' ? obj.payload.text : '';
+        if (mt === 'assistant' && text) {
+          console.log(text);
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
 }
 
 async function waitForFirstAssistantOutput(logPath: string, waitSeconds: number): Promise<boolean> {
