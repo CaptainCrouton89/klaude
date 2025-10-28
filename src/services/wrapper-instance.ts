@@ -427,12 +427,18 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       agentCount: payload.agentCount ?? null,
     };
 
-    createEvent(
-      'agent.session.created',
-      projectRecord.id,
-      session.id,
-      JSON.stringify(eventPayload),
-    );
+    try {
+      await createEvent(
+        'agent.session.created',
+        projectRecord.id,
+        session.id,
+        JSON.stringify(eventPayload),
+      );
+      debugLog(`[event-created] kind=agent.session.created, sessionId=${session.id}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to record agent.session.created event: ${message}`);
+    }
 
     await appendSessionEvent(sessionLogPath, 'agent.session.created', eventPayload);
 
@@ -450,7 +456,15 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
   };
 
   async function recordSessionEvent(sessionId: string, kind: string, payload: unknown): Promise<void> {
-    createEvent(kind, projectRecord.id, sessionId, JSON.stringify(payload));
+    try {
+      await createEvent(kind, projectRecord.id, sessionId, JSON.stringify(payload));
+      debugLog(`[event-recorded] kind=${kind}, sessionId=${sessionId}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[event-error] Failed to record event kind=${kind}: ${message}`);
+      throw error;
+    }
+
     const sessionLogPath = getSessionLogPath(
       context.projectHash,
       sessionId,
@@ -584,6 +598,8 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     agentType: string,
     payload: StartAgentRequestPayload,
   ): Promise<void> {
+    debugLog(`[runtime-start] sessionId=${session.id}, agentType=${agentType}`);
+
     try {
       await fsp.access(agentRuntimeEntryPath);
     } catch {
@@ -599,6 +615,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       wrapperConfig.projectsDir,
     );
 
+    debugLog(`[runtime-spawn] entry=${agentRuntimeEntryPath}`);
     const child = spawn(process.execPath, [agentRuntimeEntryPath], {
       cwd: context.projectRoot,
       env: {
@@ -620,11 +637,14 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     };
 
     agentRuntimes.set(session.id, runtimeState);
+    debugLog(`[runtime-tracked] sessionId=${session.id}`);
 
     child.once('spawn', async () => {
       if (!child.pid) {
+        debugLog(`[runtime-spawn-no-pid] sessionId=${session.id}`);
         return;
       }
+      debugLog(`[runtime-spawned] sessionId=${session.id}, pid=${child.pid}`);
       const runtimeProcess = createRuntimeProcess(session.id, child.pid, 'sdk', true);
       runtimeState.runtimeProcessId = runtimeProcess.id;
       updateSessionProcessPid(session.id, child.pid);
@@ -640,7 +660,13 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     child.once('error', async (error) => {
       const message = error instanceof Error ? error.message : String(error);
-      await recordSessionEvent(session.id, 'agent.runtime.process.error', { message });
+      debugLog(`[runtime-error] sessionId=${session.id}, error=${message}`);
+      try {
+        await recordSessionEvent(session.id, 'agent.runtime.process.error', { message });
+      } catch (recordError) {
+        const recordMsg = recordError instanceof Error ? recordError.message : String(recordError);
+        console.error(`[runtime-error-record-failed] ${recordMsg}`);
+      }
       updateSessionStatus(session.id, 'failed');
       markSessionEnded(session.id, 'failed');
       runtimeState.status = 'failed';
@@ -713,11 +739,19 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     };
 
     try {
+      debugLog(`[runtime-init] sending init payload, sessionId=${session.id}`);
       child.stdin?.write(`${JSON.stringify(runtimeInitPayload)}\n`);
       child.stdin?.end();
+      debugLog(`[runtime-init-sent] init payload sent, sessionId=${session.id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await recordSessionEvent(session.id, 'agent.runtime.stdin.error', { message });
+      debugLog(`[runtime-stdin-error] sessionId=${session.id}, error=${message}`);
+      try {
+        await recordSessionEvent(session.id, 'agent.runtime.stdin.error', { message });
+      } catch (recordError) {
+        const recordMsg = recordError instanceof Error ? recordError.message : String(recordError);
+        console.error(`[runtime-stdin-record-failed] ${recordMsg}`);
+      }
     }
   }
   async function waitForClaudeSessionId(
@@ -834,6 +868,8 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     sessionId: string,
     options: { resumeClaudeSessionId?: string; sourceSessionId?: string } = {},
   ): Promise<void> {
+    debugLog(`[claude-launch] sessionId=${sessionId}, resume=${options.resumeClaudeSessionId ?? 'none'}`);
+
     const args: string[] = [];
     if (options.resumeClaudeSessionId) {
       args.push('--resume', options.resumeClaudeSessionId);
@@ -857,14 +893,17 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     let claudeProcess: ChildProcess;
     try {
+      debugLog(`[claude-spawn] binary=${claudeBinary}, args=${args.join(' ')}`);
       claudeProcess = spawn(claudeBinary, args, {
         cwd: context.projectRoot,
         env,
         stdio: 'inherit',
       });
     } catch (error) {
+      const message = (error as Error).message;
+      debugLog(`[claude-spawn-error] ${message}`);
       throw new KlaudeError(
-        `Failed to launch Claude binary: ${(error as Error).message}`,
+        `Failed to launch Claude binary: ${message}`,
         'E_CLAUDE_LAUNCH_FAILED',
       );
     }
@@ -872,7 +911,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     state.currentClaudeProcess = claudeProcess;
     state.currentClaudePid = null;
 
-    claudeProcess.once('spawn', () => {
+    claudeProcess.once('spawn', async () => {
       updateSessionStatus(sessionId, 'running');
       if (claudeProcess.pid) {
         updateSessionProcessPid(sessionId, claudeProcess.pid);
@@ -888,12 +927,18 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         resumeSessionId: options.resumeClaudeSessionId ?? null,
         sourceSessionId: options.sourceSessionId ?? null,
       };
-      createEvent(
-        'wrapper.claude.spawned',
-        projectRecord.id,
-        sessionId,
-        JSON.stringify(payload),
-      );
+      try {
+        await createEvent(
+          'wrapper.claude.spawned',
+          projectRecord.id,
+          sessionId,
+          JSON.stringify(payload),
+        );
+        debugLog(`[event-created] kind=wrapper.claude.spawned, pid=${claudeProcess.pid}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`Failed to record wrapper.claude.spawned event: ${message}`);
+      }
       void appendSessionEvent(sessionLogPath, 'wrapper.claude.spawned', payload);
     });
 

@@ -65,15 +65,33 @@ program
   .description('Internal hook command invoked by Claude')
   .argument('<event>', 'Hook event (session-start | session-end)')
   .action(async (event: string) => {
+    const startTime = Date.now();
+    const logLine = (msg: string) => {
+      const timestamp = new Date().toISOString();
+      const line = `[${timestamp}] [hook:${event}] ${msg}`;
+      console.error(line);
+      // Also write to persistent log
+      fsp.appendFile('/tmp/klaude-hook.log', line + '\n').catch(() => {});
+    };
+
+    logLine(`HOOK STARTED - event=${event}, pid=${process.pid}`);
+    logLine(`Environment: KLAUDE_PROJECT_HASH=${process.env.KLAUDE_PROJECT_HASH}, KLAUDE_SESSION_ID=${process.env.KLAUDE_SESSION_ID}, KLAUDE_INSTANCE_ID=${process.env.KLAUDE_INSTANCE_ID}`);
+    logLine(`All env vars: ${JSON.stringify(process.env, null, 2)}`);
+
     try {
+      logLine('Reading payload from stdin...');
       const rawPayload = await readStdin();
+      logLine(`Received payload (${rawPayload.length} bytes): ${rawPayload.slice(0, 200)}`);
+
       if (!rawPayload) {
         throw new KlaudeError('Hook payload required on stdin', 'E_HOOK_PAYLOAD_MISSING');
       }
 
       let payload: unknown;
       try {
+        logLine('Parsing JSON payload...');
         payload = JSON.parse(rawPayload);
+        logLine(`Parsed payload: ${JSON.stringify(payload)}`);
       } catch (error) {
         throw new KlaudeError(
           `Invalid hook payload JSON: ${(error as Error).message}`,
@@ -81,6 +99,7 @@ program
         );
       }
 
+      logLine(`Dispatching to handler for event: ${event}`);
       switch (event) {
         case 'session-start':
           await handleSessionStartHook(payload as ClaudeHookPayload);
@@ -94,7 +113,17 @@ program
             'E_UNSUPPORTED_HOOK_EVENT',
           );
       }
+
+      const elapsed = Date.now() - startTime;
+      logLine(`HOOK SUCCEEDED - elapsed=${elapsed}ms`);
     } catch (error) {
+      const elapsed = Date.now() - startTime;
+      const msg = error instanceof Error ? error.message : String(error);
+      const code = error instanceof KlaudeError ? error.code : 'UNKNOWN';
+      logLine(`HOOK FAILED - code=${code}, elapsed=${elapsed}ms, error=${msg}`);
+      if (error instanceof Error && error.stack) {
+        logLine(`Stack: ${error.stack}`);
+      }
       printError(error);
       process.exitCode = process.exitCode ?? 1;
     }

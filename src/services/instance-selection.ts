@@ -45,14 +45,31 @@ export async function resolveInstanceForProject(
     if (match) {
       return match;
     }
+    // Env var was set but doesn't match any running instance
+    const availableList = candidates.map((c) => c.instanceId).join(', ');
+    const availableInfo = availableList.length > 0 ? availableList : 'none running';
+    throw new KlaudeError(
+      `Instance ${envInstanceId} from KLAUDE_INSTANCE_ID env var is not running. ` +
+      `Available instances: ${availableInfo}. ` +
+      `Start a new wrapper with \`klaude\` or specify instance explicitly with --instance`,
+      'E_INSTANCE_NOT_FOUND',
+    );
   }
 
   if (candidates.length === 1) {
     return candidates[0];
   }
 
+  if (candidates.length === 0) {
+    throw new KlaudeError(
+      'No running wrapper instances for this project. Start one with `klaude`.',
+      'E_INSTANCE_NOT_FOUND',
+    );
+  }
+
+  const availableList = candidates.map((c) => c.instanceId).join(', ');
   throw new KlaudeError(
-    'Multiple instances available; specify one with --instance',
+    `Multiple instances available; specify one with --instance. Available: ${availableList}`,
     'E_AMBIGUOUS_INSTANCE',
   );
 }
