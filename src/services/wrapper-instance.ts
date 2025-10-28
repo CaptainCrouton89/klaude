@@ -605,6 +605,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     session: ReturnType<typeof createSession>,
     agentType: string,
     payload: StartAgentRequestPayload,
+    resumeClaudeSessionId?: string | null,
   ): Promise<void> {
     debugLog(`[runtime-start] sessionId=${session.id}, agentType=${agentType}`);
 
@@ -732,6 +733,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       agentType,
       prompt: payload.prompt,
       options: payload.options ?? {},
+      resumeClaudeSessionId: resumeClaudeSessionId ?? undefined,
       metadata: {
         projectHash: context.projectHash,
         instanceId,
@@ -749,7 +751,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     try {
       debugLog(`[runtime-init] sending init payload, sessionId=${session.id}`);
       child.stdin?.write(`${JSON.stringify(runtimeInitPayload)}\n`);
-      child.stdin?.end();
+      // Keep stdin open for interactive `message` calls; do not end here.
       debugLog(`[runtime-init-sent] init payload sent, sessionId=${session.id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1074,12 +1076,56 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
   async function handleMessage(payload: MessageRequestPayload): Promise<{ status: string; messagesQueued: number }> {
     debugLog(`[message-request] sessionId=${payload.sessionId}, prompt="${payload.prompt.slice(0, 50)}..."`);
 
-    const runtime = agentRuntimes.get(payload.sessionId);
+    let runtime = agentRuntimes.get(payload.sessionId);
+
+    // If no runtime is active, attempt to start one resuming the prior Claude session
     if (!runtime) {
-      throw new KlaudeError(
-        `No running agent for session ${payload.sessionId}`,
-        'E_AGENT_NOT_RUNNING',
-      );
+      const session = getSessionById(payload.sessionId);
+      if (!session) {
+        throw new KlaudeError(`Session ${payload.sessionId} not found`, 'E_SESSION_NOT_FOUND');
+      }
+      if (session.project_id !== projectRecord.id) {
+        throw new KlaudeError(
+          `Session ${payload.sessionId} does not belong to this project`,
+          'E_SESSION_PROJECT_MISMATCH',
+        );
+      }
+
+      // Derive the agent type label (stored in session metadata when created)
+      let derivedAgentType = 'sdk';
+      try {
+        if (session.metadata_json) {
+          const meta = JSON.parse(session.metadata_json) as { agentType?: string };
+          if (meta && typeof meta.agentType === 'string' && meta.agentType.trim().length > 0) {
+            derivedAgentType = meta.agentType;
+          }
+        }
+      } catch {
+        // ignore metadata parse errors; fallback to 'sdk'
+      }
+
+      // Use the last known Claude session id, if any, so the message continues the same transcript
+      const resumeId = session.last_claude_session_id ?? null;
+
+      // Launch a runtime for this existing session, using the incoming message as the initial prompt
+      await startAgentRuntimeProcess(session as ReturnType<typeof createSession>, derivedAgentType, {
+        agentType: derivedAgentType,
+        prompt: payload.prompt,
+        options: { detach: true },
+      }, resumeId);
+
+      runtime = agentRuntimes.get(payload.sessionId) ?? null as any;
+
+      await recordSessionEvent(payload.sessionId, 'agent.message.runtime_started', {
+        resumed: Boolean(resumeId),
+        resumeClaudeSessionId: resumeId,
+      });
+
+      // Since the initial prompt was passed to the runtime init, we do not need to write again here.
+      return {
+        status: 'queued',
+        messagesQueued: 1,
+      };
     }
 
     if (!runtime.process.stdin) {

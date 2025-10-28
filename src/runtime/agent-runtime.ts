@@ -32,6 +32,8 @@ interface RuntimeInitPayload {
     share?: boolean;
     detach?: boolean;
   };
+  // If provided, resume this Claude session id when running the initial query
+  resumeClaudeSessionId?: string | null;
   metadata?: {
     projectHash?: string;
     projectRoot?: string;
@@ -238,6 +240,12 @@ function buildQueryOptions(
     model: init.sdk?.model ?? undefined,
     fallbackModel: init.sdk?.fallbackModel ?? undefined,
   };
+
+  // Continue a specific Claude session if requested
+  if (typeof init.resumeClaudeSessionId === 'string' && init.resumeClaudeSessionId.trim().length > 0) {
+    options.resume = init.resumeClaudeSessionId;
+    options.forkSession = false;
+  }
 
   if (init.metadata?.projectRoot) {
     options.cwd = init.metadata.projectRoot;
