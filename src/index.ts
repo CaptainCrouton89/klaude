@@ -334,7 +334,10 @@ program
         throw new KlaudeError(response.error.message, response.error.code);
       }
 
-      console.log('Message submitted to wrapper instance.');
+      const result = response.result as { status?: string; messagesQueued?: number } | undefined;
+      const status = result && typeof result.status === 'string' ? result.status : 'submitted';
+      const queued = result && typeof result.messagesQueued === 'number' ? result.messagesQueued : 1;
+      console.log(`Message ${status} (${queued} message${queued === 1 ? '' : 's'} queued).`);
     } catch (error) {
       printError(error);
       process.exitCode = process.exitCode ?? 1;
@@ -365,7 +368,9 @@ program
         throw new KlaudeError(response.error.message, response.error.code);
       }
 
-      console.log('Interrupt request sent to wrapper instance.');
+      const result = response.result as { interrupted?: boolean; signal?: string } | undefined;
+      const signal = result && typeof result.signal === 'string' ? result.signal : 'SIGINT';
+      console.log(`Agent interrupted with ${signal}.`);
     } catch (error) {
       printError(error);
       process.exitCode = process.exitCode ?? 1;

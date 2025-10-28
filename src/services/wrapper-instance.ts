@@ -1,48 +1,50 @@
-import net from 'node:net';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { WriteStream } from 'node:tty';
+import { fileURLToPath } from 'node:url';
 
-import { loadConfig } from '@/services/config-loader.js';
-import { prepareProjectContext } from '@/services/project-context.js';
+import { VALID_AGENT_TYPES } from '@/config/constants.js';
 import {
-  registerInstance,
-  markInstanceEnded as markRegistryInstanceEnded,
-} from '@/services/instance-registry.js';
-import {
-  initializeDatabase,
   closeDatabase,
-  createProject,
-  getProjectByHash,
-  createInstance,
-  markInstanceEnded,
-  createSession,
-  updateSessionStatus,
-  updateSessionProcessPid,
-  markSessionEnded,
-  createRuntimeProcess,
-  markRuntimeExited,
-  createEvent,
-  getSessionById,
   createClaudeSessionLink,
-  updateSessionClaudeLink,
+  createEvent,
+  createInstance,
+  createProject,
+  createRuntimeProcess,
+  createSession,
   getClaudeSessionLink,
+  getProjectByHash,
+  getSessionById,
+  initializeDatabase,
+  markInstanceEnded,
+  markRuntimeExited,
+  markSessionEnded,
+  updateSessionClaudeLink,
+  updateSessionProcessPid,
+  updateSessionStatus,
 } from '@/db/index.js';
-import { generateULID } from '@/utils/ulid.js';
-import { getInstanceSocketPath, getSessionLogPath } from '@/utils/path-helper.js';
-import { KlaudeError } from '@/utils/error-handler.js';
-import { appendSessionEvent } from '@/utils/logger.js';
+import { loadConfig } from '@/services/config-loader.js';
+import {
+  markInstanceEnded as markRegistryInstanceEnded,
+  registerInstance,
+} from '@/services/instance-registry.js';
+import { prepareProjectContext } from '@/services/project-context.js';
 import type {
-  InstanceRequest,
-  InstanceStatusPayload,
   CheckoutRequestPayload,
   CheckoutResponsePayload,
+  InstanceRequest,
+  InstanceStatusPayload,
+  InterruptRequestPayload,
+  MessageRequestPayload,
   StartAgentRequestPayload,
   StartAgentResponsePayload,
 } from '@/types/instance-ipc.js';
-import { VALID_AGENT_TYPES } from '@/config/constants.js';
+import { KlaudeError } from '@/utils/error-handler.js';
+import { appendSessionEvent } from '@/utils/logger.js';
+import { getInstanceSocketPath, getSessionLogPath } from '@/utils/path-helper.js';
+import { generateULID } from '@/utils/ulid.js';
 
 interface WrapperStartOptions {
   projectCwd?: string;
@@ -1069,6 +1071,92 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     await finalize('failed', null);
   }
 
+  async function handleMessage(payload: MessageRequestPayload): Promise<{ status: string; messagesQueued: number }> {
+    debugLog(`[message-request] sessionId=${payload.sessionId}, prompt="${payload.prompt.slice(0, 50)}..."`);
+
+    const runtime = agentRuntimes.get(payload.sessionId);
+    if (!runtime) {
+      throw new KlaudeError(
+        `No running agent for session ${payload.sessionId}`,
+        'E_AGENT_NOT_RUNNING',
+      );
+    }
+
+    if (!runtime.process.stdin) {
+      throw new KlaudeError(
+        `Agent runtime for session ${payload.sessionId} has no stdin`,
+        'E_AGENT_STDIN_UNAVAILABLE',
+      );
+    }
+
+    const messagePayload = {
+      type: 'message',
+      prompt: payload.prompt,
+    };
+
+    try {
+      debugLog(`[message-send] sessionId=${payload.sessionId}`);
+      runtime.process.stdin.write(`${JSON.stringify(messagePayload)}\n`);
+
+      await recordSessionEvent(payload.sessionId, 'agent.message.sent', {
+        prompt: payload.prompt,
+        waitSeconds: payload.waitSeconds ?? 0,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new KlaudeError(
+        `Failed to send message to agent: ${message}`,
+        'E_MESSAGE_SEND_FAILED',
+      );
+    }
+
+    return {
+      status: 'queued',
+      messagesQueued: 1,
+    };
+  }
+
+  async function handleInterrupt(payload: InterruptRequestPayload): Promise<{ interrupted: boolean; signal: string }> {
+    debugLog(`[interrupt-request] sessionId=${payload.sessionId}, signal=${payload.signal ?? 'SIGINT'}`);
+
+    const runtime = agentRuntimes.get(payload.sessionId);
+    if (!runtime) {
+      throw new KlaudeError(
+        `No running agent for session ${payload.sessionId}`,
+        'E_AGENT_NOT_RUNNING',
+      );
+    }
+
+    if (!runtime.process.pid) {
+      throw new KlaudeError(
+        `Agent runtime process has no PID`,
+        'E_AGENT_PID_UNAVAILABLE',
+      );
+    }
+
+    const signal = payload.signal ?? 'SIGINT';
+    try {
+      debugLog(`[interrupt-send] sessionId=${payload.sessionId}, pid=${runtime.process.pid}, signal=${signal}`);
+      process.kill(runtime.process.pid, signal as NodeJS.Signals);
+
+      await recordSessionEvent(payload.sessionId, 'agent.interrupted', {
+        signal,
+        pid: runtime.process.pid,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new KlaudeError(
+        `Failed to interrupt agent: ${message}`,
+        'E_INTERRUPT_FAILED',
+      );
+    }
+
+    return {
+      interrupted: true,
+      signal,
+    };
+  }
+
   async function handleCheckout(
     payload: CheckoutRequestPayload,
   ): Promise<CheckoutResponsePayload> {
@@ -1255,9 +1343,9 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         case 'checkout':
           return await handleCheckout(request.payload);
         case 'message':
-          throw new KlaudeError('Messaging is not implemented yet', 'E_MESSAGE_UNAVAILABLE');
+          return await handleMessage(request.payload);
         case 'interrupt':
-          throw new KlaudeError('Interrupt is not implemented yet', 'E_INTERRUPT_UNAVAILABLE');
+          return await handleInterrupt(request.payload);
         default:
           throw new KlaudeError(
             `Unsupported instance request: ${(request as { action?: string }).action ?? 'unknown'}`,

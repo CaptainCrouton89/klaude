@@ -138,9 +138,17 @@ export async function handleSessionStartHook(payload: ClaudeHookPayload): Promis
       await debugLog(`  Claude session ${claudeSessionId} already linked`);
     }
 
-    await debugLog('Step 7: Updating session Claude link...');
-    updateSessionClaudeLink(session.id, claudeSessionId, payload.transcript_path ?? null);
-    await debugLog(`  ✓ Updated Claude link`);
+    // Only update last_claude_session_id for startup sessions.
+    // For resume sessions, keep the original session ID since Claude creates
+    // a new UUID when resuming, but we want to refer to the original session.
+    const isStartup = payload.source === 'startup' || payload.source === undefined;
+    await debugLog(`Step 7: ${isStartup ? 'Updating' : 'Skipping update of'} session Claude link (source=${payload.source})...`);
+    if (isStartup) {
+      updateSessionClaudeLink(session.id, claudeSessionId, payload.transcript_path ?? null);
+      await debugLog(`  ✓ Updated Claude link`);
+    } else {
+      await debugLog(`  ⊘ Skipped update for resume source`);
+    }
 
     // Record event
     await debugLog('Step 8: Recording event to database...');

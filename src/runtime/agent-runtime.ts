@@ -9,6 +9,7 @@ import { stdin, stdout, stderr, exit } from 'node:process';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import readline from 'node:readline';
 
 import type {
   Options as QueryOptions,
@@ -17,6 +18,7 @@ import type {
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
+  SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
 type PermissionMode = QueryOptions['permissionMode'];
@@ -62,22 +64,29 @@ async function readRuntimeConfig(): Promise<RuntimeInitPayload> {
     throw new Error('Runtime config must be provided on stdin');
   }
 
-  const chunks: Buffer[] = [];
-  for await (const chunk of stdin) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : chunk);
-  }
+  return new Promise((resolve, reject) => {
+    const rl = readline.createInterface({ input: stdin });
 
-  const raw = Buffer.concat(chunks).toString('utf-8').trim();
-  if (!raw) {
-    throw new Error('Runtime config payload is empty');
-  }
+    rl.once('line', (line) => {
+      rl.close();
+      const raw = line.trim();
+      if (!raw) {
+        reject(new Error('Runtime config payload is empty'));
+        return;
+      }
 
-  try {
-    return JSON.parse(raw) as RuntimeInitPayload;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to parse runtime config JSON: ${message}`);
-  }
+      try {
+        resolve(JSON.parse(raw) as RuntimeInitPayload);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        reject(new Error(`Unable to parse runtime config JSON: ${message}`));
+      }
+    });
+
+    rl.once('error', (error) => {
+      reject(error);
+    });
+  });
 }
 
 function expandClaudeQueryPath(): string {
@@ -139,6 +148,85 @@ function extractMessageText(message: SDKMessage): string | null {
   }
 }
 
+async function* createMessageStream(
+  abortController: AbortController,
+  initialPrompt: string,
+): AsyncGenerator<SDKUserMessage> {
+  emit({ type: 'log', level: 'info', message: 'Streaming input mode: agent ready for messages' });
+
+  // First, yield the initial prompt
+  yield {
+    type: 'user',
+    session_id: 'placeholder',
+    message: {
+      content: [
+        {
+          type: 'text',
+          text: initialPrompt,
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+  } as SDKUserMessage;
+
+  // Then listen for additional messages from stdin
+  const rl = readline.createInterface({
+    input: stdin,
+    terminal: false,
+  });
+
+  let messageCount = 0;
+
+  try {
+    for await (const line of rl) {
+      if (abortController.signal.aborted) {
+        emit({ type: 'log', level: 'info', message: 'Message stream aborted' });
+        break;
+      }
+
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(trimmed) as { type?: string; prompt?: string };
+        if (parsed.type === 'message' && parsed.prompt) {
+          messageCount++;
+          emit({ type: 'log', level: 'info', message: `Received message ${messageCount}: ${parsed.prompt.slice(0, 50)}...` });
+          yield {
+            type: 'user',
+            session_id: 'placeholder',
+            message: {
+              content: [
+                {
+                  type: 'text',
+                  text: parsed.prompt,
+                },
+              ],
+            },
+            parent_tool_use_id: null,
+          } as SDKUserMessage;
+        }
+      } catch (parseError) {
+        const errMsg = parseError instanceof Error ? parseError.message : String(parseError);
+        emit({
+          type: 'log',
+          level: 'warn',
+          message: `Failed to parse message from stdin: ${errMsg}`,
+        });
+      }
+    }
+  } catch (streamError) {
+    const errMsg = streamError instanceof Error ? streamError.message : String(streamError);
+    emit({ type: 'log', level: 'error', message: `Message stream error: ${errMsg}` });
+  } finally {
+    rl.close();
+  }
+
+  emit({ type: 'log', level: 'info', message: 'Message stream closed' });
+}
+
 function buildQueryOptions(
   init: RuntimeInitPayload,
   abortController: AbortController,
@@ -198,6 +286,7 @@ async function run(): Promise<void> {
 
   let stream: Query;
   try {
+    // Use string prompt initially; messages will be handled separately
     stream = queryFn({
       prompt: init.prompt,
       options,
@@ -211,9 +300,13 @@ async function run(): Promise<void> {
 
   emit({ type: 'status', status: 'running' });
 
-  try {
-    for await (const message of stream) {
+  // Track session ID for continuing conversation
+  let currentSessionId: string | undefined;
+
+  async function processQueryStream(queryStream: Query): Promise<void> {
+    for await (const message of queryStream) {
       if (!announcedSessionId && message.session_id) {
+        currentSessionId = message.session_id;
         emit({ type: 'claude-session', sessionId: message.session_id, transcriptPath: null });
         announcedSessionId = true;
       }
@@ -236,6 +329,62 @@ async function run(): Promise<void> {
         });
       }
     }
+  }
+
+  async function listenForMessages(): Promise<void> {
+    const rl = readline.createInterface({
+      input: stdin,
+      terminal: false,
+    });
+
+    for await (const line of rl) {
+      if (abortController.signal.aborted) {
+        rl.close();
+        break;
+      }
+
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(trimmed) as { type?: string; prompt?: string };
+        if (parsed.type === 'message' && parsed.prompt && currentSessionId) {
+          emit({ type: 'log', level: 'info', message: `Received message: ${parsed.prompt.slice(0, 50)}...` });
+
+          try {
+            // Continue the conversation with the new message
+            const continuedStream = queryFn({
+              prompt: parsed.prompt,
+              options: {
+                ...options,
+                continue: true,
+              },
+            });
+
+            await processQueryStream(continuedStream);
+          } catch (error) {
+            const errMsg = error instanceof Error ? error.message : String(error);
+            emit({ type: 'log', level: 'error', message: `Failed to process message: ${errMsg}` });
+          }
+        }
+      } catch (parseError) {
+        const errMsg = parseError instanceof Error ? parseError.message : String(parseError);
+        emit({ type: 'log', level: 'warn', message: `Failed to parse stdin message: ${errMsg}` });
+      }
+    }
+
+    rl.close();
+  }
+
+  try {
+    // Run the initial query
+    await processQueryStream(stream);
+
+    // After initial query, listen for additional messages
+    emit({ type: 'log', level: 'info', message: 'Initial query complete, listening for messages on stdin' });
+    await listenForMessages();
 
     emit({ type: 'status', status: 'completed' });
     finalize('done');
