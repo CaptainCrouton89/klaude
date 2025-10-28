@@ -138,6 +138,8 @@ program
   .option('-c, --checkout', 'Request immediate checkout after start')
   .option('-s, --share', 'Share current context with the new agent')
   .option('-d, --detach', 'Do not attach to the agent stream')
+  .option('--attach', 'Attach to the agent stream (prints assistant text only)')
+  .option('-v, --verbose', 'Verbose: print debug details (instance, log path)')
   .option('--instance <id>', 'Target instance id')
   .option('-C, --cwd <path>', 'Project directory override')
   .action(async (agentType, prompt, agentCountArg, options) => {
@@ -173,10 +175,24 @@ program
       }
 
       const result = response.result;
-      console.log(`Started agent session ${result.sessionId} (${result.agentType})`);
-      console.log(`Instance: ${result.instanceId}`);
-      console.log(`Status: ${result.status}`);
-      console.log(`Log: ${result.logPath}`);
+
+      if (options.verbose) {
+        console.log(`Started agent session ${result.sessionId} (${result.agentType})`);
+        console.log(`Instance: ${result.instanceId}`);
+        console.log(`Status: ${result.status}`);
+        console.log(`Log: ${result.logPath}`);
+      }
+
+      // By default, print concise, agent-friendly hints
+      if (!options.verbose) {
+        console.log(`session: ${result.sessionId} (agent=${result.agentType})`);
+        console.log('Next steps:');
+        console.log(`  - Tail output:   klaude read ${result.sessionId} -t`);
+        console.log(`  - Enter TUI:     klaude checkout ${result.sessionId}`);
+        console.log(`  - Message:       klaude message ${result.sessionId} "<prompt>" --wait 5`);
+        console.log(`  - Interrupt:     klaude interrupt ${result.sessionId}`);
+        console.log('Tip: keep working; this agent runs in the background. Use -v for debug details.');
+      }
 
       if (payload.options?.checkout) {
         const checkoutResponse = await requestCheckout(instance.socketPath, {
@@ -187,13 +203,17 @@ program
           throw new KlaudeError(checkoutResponse.error.message, checkoutResponse.error.code);
         }
         const checkoutResult = checkoutResponse.result;
-        console.log(
-          `Checkout activated for session ${checkoutResult.sessionId} (resume ${checkoutResult.claudeSessionId}).`,
-        );
+        if (options.verbose) {
+          console.log(
+            `Checkout activated for session ${checkoutResult.sessionId} (resume ${checkoutResult.claudeSessionId}).`,
+          );
+        } else {
+          console.log(`session: ${checkoutResult.sessionId} (entered via resume)`);
+        }
       }
-      // Attach to live log stream unless explicitly detached or we just checked out
-      if (!payload.options?.detach && !payload.options?.checkout) {
-        await tailSessionLog(result.logPath, { untilExit: true, verbose: false });
+      // Attach only if explicitly requested
+      if (options.attach && !payload.options?.checkout) {
+        await tailSessionLog(result.logPath, { untilExit: true, verbose: Boolean(options.verbose) });
       }
     } catch (error) {
       printError(error);
