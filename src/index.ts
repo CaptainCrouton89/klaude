@@ -150,7 +150,17 @@ program
       console.log(`Log: ${result.logPath}`);
 
       if (payload.options?.checkout) {
-        console.log('Checkout will be processed once switching is implemented.');
+        const checkoutResponse = await requestCheckout(instance.socketPath, {
+          sessionId: result.sessionId,
+          waitSeconds: 5,
+        });
+        if (!checkoutResponse.ok) {
+          throw new KlaudeError(checkoutResponse.error.message, checkoutResponse.error.code);
+        }
+        const checkoutResult = checkoutResponse.result;
+        console.log(
+          `Checkout activated for session ${checkoutResult.sessionId} (resume ${checkoutResult.claudeSessionId}).`,
+        );
       }
       if (payload.options?.detach) {
         console.log('Detached mode not yet available; session created for tracking only.');
