@@ -10,6 +10,9 @@ import {
   getClaudeSessionLink,
 } from '@/db/index.js';
 import { KlaudeError } from '@/utils/error-handler.js';
+import { appendSessionEvent } from '@/utils/logger.js';
+import { getSessionLogPath } from '@/utils/path-helper.js';
+import { loadConfig } from '@/services/config-loader.js';
 
 export interface ClaudeHookPayload {
   session_id: string;
@@ -77,6 +80,10 @@ export async function handleSessionStartHook(payload: ClaudeHookPayload): Promis
       session.id,
       JSON.stringify(payload),
     );
+
+    const config = await loadConfig();
+    const logPath = getSessionLogPath(projectHash, session.id, config.wrapper?.projectsDir);
+    await appendSessionEvent(logPath, 'hook.session_start', payload);
   } finally {
     closeDatabase();
   }
@@ -112,6 +119,10 @@ export async function handleSessionEndHook(payload: ClaudeHookPayload): Promise<
       link.klaude_session_id,
       JSON.stringify(payload),
     );
+
+    const config = await loadConfig();
+    const logPath = getSessionLogPath(projectHash, link.klaude_session_id, config.wrapper?.projectsDir);
+    await appendSessionEvent(logPath, 'hook.session_end', payload);
   } finally {
     closeDatabase();
   }

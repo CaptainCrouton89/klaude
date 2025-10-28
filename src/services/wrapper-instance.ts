@@ -29,6 +29,7 @@ import {
 import { generateULID } from '@/utils/ulid.js';
 import { getInstanceSocketPath, getSessionLogPath } from '@/utils/path-helper.js';
 import { KlaudeError } from '@/utils/error-handler.js';
+import { appendSessionEvent } from '@/utils/logger.js';
 import type {
   InstanceRequest,
   InstanceStatusPayload,
@@ -337,17 +338,21 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     );
     await ensureLogFile(sessionLogPath);
 
+    const eventPayload = {
+      agentType,
+      parentSessionId: parentSession.id,
+      options: payload.options ?? {},
+      agentCount: payload.agentCount ?? null,
+    };
+
     createEvent(
       'agent.session.created',
       project.id,
       session.id,
-      JSON.stringify({
-        agentType,
-        parentSessionId: parentSession.id,
-        options: payload.options ?? {},
-        agentCount: payload.agentCount ?? null,
-      }),
+      JSON.stringify(eventPayload),
     );
+
+    await appendSessionEvent(sessionLogPath, 'agent.session.created', eventPayload);
 
     return {
       sessionId: session.id,
@@ -436,12 +441,14 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       );
     }
 
+    const startPayload = { instanceId };
     createEvent(
       'wrapper.start',
       project.id,
       rootSession.id,
-      JSON.stringify({ instanceId }),
+      JSON.stringify(startPayload),
     );
+    await appendSessionEvent(logPath, 'wrapper.start', startPayload);
 
     const env = {
       ...process.env,
@@ -456,7 +463,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       stdio: 'inherit',
     });
 
-    claudeProcess.once('spawn', () => {
+    claudeProcess.once('spawn', async () => {
       updateSessionStatus(rootSession.id, 'running');
       if (claudeProcess.pid) {
         updateSessionProcessPid(rootSession.id, claudeProcess.pid);
@@ -464,12 +471,14 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         runtimeProcessId = runtimeProcess.id;
         currentClaudePid = claudeProcess.pid;
       }
+      const spawnPayload = { pid: claudeProcess.pid };
       createEvent(
         'wrapper.claude.spawned',
         project.id,
         rootSession.id,
-        JSON.stringify({ pid: claudeProcess.pid }),
+        JSON.stringify(spawnPayload),
       );
+      await appendSessionEvent(logPath, 'wrapper.claude.spawned', spawnPayload);
     });
 
     let exitResult: ClaudeExitResult | null = null;
@@ -488,16 +497,19 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       rootSession.id,
       JSON.stringify(exitResult),
     );
+    await appendSessionEvent(logPath, 'wrapper.claude.exited', exitResult);
 
     process.exitCode = exitResult.code ?? (exitResult.signal ? 1 : 0);
   } catch (error) {
     await finalize('failed', null);
+    const errorPayload = { message: (error as Error).message };
     createEvent(
       'wrapper.claude.error',
       project.id,
       rootSession.id,
-      JSON.stringify({ message: (error as Error).message }),
+      JSON.stringify(errorPayload),
     );
+    await appendSessionEvent(logPath, 'wrapper.claude.error', errorPayload);
     process.exitCode = 1;
     throw error;
   } finally {
