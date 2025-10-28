@@ -37,6 +37,11 @@ export interface CheckoutRequestPayload {
   waitSeconds?: number;
 }
 
+export interface CheckoutResponsePayload {
+  sessionId: string;
+  claudeSessionId: string;
+}
+
 export interface MessageRequestPayload {
   sessionId: string;
   prompt: string;
