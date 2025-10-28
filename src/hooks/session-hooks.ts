@@ -1,3 +1,4 @@
+import { promises as fsp } from 'node:fs';
 import {
   initializeDatabase,
   closeDatabase,
@@ -13,6 +14,23 @@ import { KlaudeError } from '@/utils/error-handler.js';
 import { appendSessionEvent } from '@/utils/logger.js';
 import { getSessionLogPath } from '@/utils/path-helper.js';
 import { loadConfig } from '@/services/config-loader.js';
+
+async function debugLog(message: string, toStderr = true): Promise<void> {
+  const timestamp = new Date().toISOString();
+  const line = `[${timestamp}] ${message}`;
+
+  // Write to stderr immediately for visibility
+  if (toStderr) {
+    process.stderr.write(line + '\n');
+  }
+
+  // Write to persistent log
+  try {
+    await fsp.appendFile('/tmp/klaude-hook-session.log', line + '\n');
+  } catch {
+    // ignore write failures
+  }
+}
 
 export interface ClaudeHookPayload {
   session_id: string;
@@ -38,12 +56,44 @@ function requirePayloadSessionId(payload: ClaudeHookPayload): string {
 }
 
 export async function handleSessionStartHook(payload: ClaudeHookPayload): Promise<void> {
-  const projectHash = requireEnv('KLAUDE_PROJECT_HASH');
-  const klaudeSessionId = requireEnv('KLAUDE_SESSION_ID');
-  const claudeSessionId = requirePayloadSessionId(payload);
+  const startTime = Date.now();
 
-  await initializeDatabase();
+  await debugLog('════════════════════════════════════════════════════════════');
+  await debugLog('SESSION_START_HOOK INVOKED');
+  await debugLog(`Timestamp: ${new Date().toISOString()}`);
+  await debugLog(`PID: ${process.pid}`);
+  await debugLog('════════════════════════════════════════════════════════════');
+
+  // Log environment
+  await debugLog(`Environment variables present:`);
+  await debugLog(`  KLAUDE_PROJECT_HASH=${process.env.KLAUDE_PROJECT_HASH}`);
+  await debugLog(`  KLAUDE_SESSION_ID=${process.env.KLAUDE_SESSION_ID}`);
+  await debugLog(`  KLAUDE_INSTANCE_ID=${process.env.KLAUDE_INSTANCE_ID}`);
+  await debugLog(`  HOME=${process.env.HOME}`);
+  await debugLog(`  PWD=${process.cwd()}`);
+
+  // Log payload
+  await debugLog(`Payload received: ${JSON.stringify(payload, null, 2)}`);
+
   try {
+    // Extract IDs
+    await debugLog('Step 1: Extracting environment variables...');
+    const projectHash = requireEnv('KLAUDE_PROJECT_HASH');
+    await debugLog(`  ✓ KLAUDE_PROJECT_HASH=${projectHash}`);
+
+    const klaudeSessionId = requireEnv('KLAUDE_SESSION_ID');
+    await debugLog(`  ✓ KLAUDE_SESSION_ID=${klaudeSessionId}`);
+
+    const claudeSessionId = requirePayloadSessionId(payload);
+    await debugLog(`  ✓ Claude session_id=${claudeSessionId}`);
+
+    // Initialize DB
+    await debugLog('Step 2: Initializing database...');
+    await initializeDatabase();
+    await debugLog(`  ✓ Database initialized`);
+
+    // Get project
+    await debugLog('Step 3: Looking up project...');
     const project = getProjectByHash(projectHash);
     if (!project) {
       throw new KlaudeError(
@@ -51,7 +101,10 @@ export async function handleSessionStartHook(payload: ClaudeHookPayload): Promis
         'E_PROJECT_NOT_REGISTERED',
       );
     }
+    await debugLog(`  ✓ Found project: id=${project.id}, root_path=${project.root_path}`);
 
+    // Get session
+    await debugLog('Step 4: Looking up Klaude session...');
     const session = getSessionById(klaudeSessionId);
     if (!session) {
       throw new KlaudeError(
@@ -59,47 +112,110 @@ export async function handleSessionStartHook(payload: ClaudeHookPayload): Promis
         'E_SESSION_NOT_FOUND',
       );
     }
+    await debugLog(`  ✓ Found session: id=${session.id}, status=${session.status}`);
 
+    // Verify session belongs to project
+    await debugLog('Step 5: Verifying session-project relationship...');
     if (session.project_id !== project.id) {
       throw new KlaudeError(
         `Session ${klaudeSessionId} does not belong to project ${projectHash}`,
         'E_SESSION_PROJECT_MISMATCH',
       );
     }
+    await debugLog(`  ✓ Session belongs to correct project`);
 
-    // Check if this Claude session is already linked (e.g., from a previous `--resume`)
+    // Handle Claude session link
+    await debugLog('Step 6: Handling Claude session link...');
     const existingLink = getClaudeSessionLink(claudeSessionId);
     if (!existingLink) {
-      // First time seeing this Claude session ID - create the link
+      await debugLog(`  Creating new link for Claude session ${claudeSessionId}`);
       createClaudeSessionLink(session.id, claudeSessionId, {
         transcriptPath: payload.transcript_path ?? null,
         source: payload.source ?? null,
       });
+      await debugLog(`  ✓ Created new Claude session link`);
+    } else {
+      await debugLog(`  Claude session ${claudeSessionId} already linked`);
     }
 
+    await debugLog('Step 7: Updating session Claude link...');
     updateSessionClaudeLink(session.id, claudeSessionId, payload.transcript_path ?? null);
+    await debugLog(`  ✓ Updated Claude link`);
 
-    createEvent(
+    // Record event
+    await debugLog('Step 8: Recording event to database...');
+    await createEvent(
       'hook.session_start',
       project.id,
       session.id,
       JSON.stringify(payload),
     );
+    await debugLog(`  ✓ Event recorded`);
 
+    // Append to session log
+    await debugLog('Step 9: Appending to session log file...');
     const config = await loadConfig();
     const logPath = getSessionLogPath(projectHash, session.id, config.wrapper?.projectsDir);
+    await debugLog(`  Log path: ${logPath}`);
     await appendSessionEvent(logPath, 'hook.session_start', payload);
+    await debugLog(`  ✓ Appended to log`);
+
+    const elapsed = Date.now() - startTime;
+    await debugLog(`════════════════════════════════════════════════════════════`);
+    await debugLog(`✓ SESSION_START_HOOK COMPLETED (${elapsed}ms)`);
+    await debugLog(`════════════════════════════════════════════════════════════`);
+  } catch (error) {
+    const elapsed = Date.now() - startTime;
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof KlaudeError ? error.code : 'UNKNOWN';
+    const stack = error instanceof Error ? error.stack : '';
+
+    await debugLog(`════════════════════════════════════════════════════════════`);
+    await debugLog(`✗ SESSION_START_HOOK FAILED (${elapsed}ms)`);
+    await debugLog(`Error code: ${code}`);
+    await debugLog(`Error message: ${message}`);
+    if (stack) {
+      await debugLog(`Stack trace:\n${stack}`);
+    }
+    await debugLog(`════════════════════════════════════════════════════════════`);
+
+    throw error;
   } finally {
     closeDatabase();
   }
 }
 
 export async function handleSessionEndHook(payload: ClaudeHookPayload): Promise<void> {
-  const projectHash = requireEnv('KLAUDE_PROJECT_HASH');
-  const claudeSessionId = requirePayloadSessionId(payload);
+  const startTime = Date.now();
 
-  await initializeDatabase();
+  await debugLog('════════════════════════════════════════════════════════════');
+  await debugLog('SESSION_END_HOOK INVOKED');
+  await debugLog(`Timestamp: ${new Date().toISOString()}`);
+  await debugLog(`PID: ${process.pid}`);
+  await debugLog('════════════════════════════════════════════════════════════');
+
+  // Log environment
+  await debugLog(`Environment variables present:`);
+  await debugLog(`  KLAUDE_PROJECT_HASH=${process.env.KLAUDE_PROJECT_HASH}`);
+  await debugLog(`  HOME=${process.env.HOME}`);
+  await debugLog(`  PWD=${process.cwd()}`);
+
+  // Log payload
+  await debugLog(`Payload received: ${JSON.stringify(payload, null, 2)}`);
+
   try {
+    await debugLog('Step 1: Extracting environment variables...');
+    const projectHash = requireEnv('KLAUDE_PROJECT_HASH');
+    await debugLog(`  ✓ KLAUDE_PROJECT_HASH=${projectHash}`);
+
+    const claudeSessionId = requirePayloadSessionId(payload);
+    await debugLog(`  ✓ Claude session_id=${claudeSessionId}`);
+
+    await debugLog('Step 2: Initializing database...');
+    await initializeDatabase();
+    await debugLog(`  ✓ Database initialized`);
+
+    await debugLog('Step 3: Looking up project...');
     const project = getProjectByHash(projectHash);
     if (!project) {
       throw new KlaudeError(
@@ -107,7 +223,9 @@ export async function handleSessionEndHook(payload: ClaudeHookPayload): Promise<
         'E_PROJECT_NOT_REGISTERED',
       );
     }
+    await debugLog(`  ✓ Found project: id=${project.id}, root_path=${project.root_path}`);
 
+    await debugLog('Step 4: Looking up Claude session link...');
     const link = getClaudeSessionLink(claudeSessionId);
     if (!link) {
       throw new KlaudeError(
@@ -115,19 +233,48 @@ export async function handleSessionEndHook(payload: ClaudeHookPayload): Promise<
         'E_SESSION_LINK_NOT_FOUND',
       );
     }
+    await debugLog(`  ✓ Found link: klaude_session_id=${link.klaude_session_id}`);
 
+    await debugLog('Step 5: Marking Claude session as ended...');
     markClaudeSessionEnded(claudeSessionId);
+    await debugLog(`  ✓ Marked session ended`);
 
-    createEvent(
+    await debugLog('Step 6: Recording event to database...');
+    await createEvent(
       'hook.session_end',
       project.id,
       link.klaude_session_id,
       JSON.stringify(payload),
     );
+    await debugLog(`  ✓ Event recorded`);
 
+    await debugLog('Step 7: Appending to session log file...');
     const config = await loadConfig();
     const logPath = getSessionLogPath(projectHash, link.klaude_session_id, config.wrapper?.projectsDir);
+    await debugLog(`  Log path: ${logPath}`);
     await appendSessionEvent(logPath, 'hook.session_end', payload);
+    await debugLog(`  ✓ Appended to log`);
+
+    const elapsed = Date.now() - startTime;
+    await debugLog(`════════════════════════════════════════════════════════════`);
+    await debugLog(`✓ SESSION_END_HOOK COMPLETED (${elapsed}ms)`);
+    await debugLog(`════════════════════════════════════════════════════════════`);
+  } catch (error) {
+    const elapsed = Date.now() - startTime;
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof KlaudeError ? error.code : 'UNKNOWN';
+    const stack = error instanceof Error ? error.stack : '';
+
+    await debugLog(`════════════════════════════════════════════════════════════`);
+    await debugLog(`✗ SESSION_END_HOOK FAILED (${elapsed}ms)`);
+    await debugLog(`Error code: ${code}`);
+    await debugLog(`Error message: ${message}`);
+    if (stack) {
+      await debugLog(`Stack trace:\n${stack}`);
+    }
+    await debugLog(`════════════════════════════════════════════════════════════`);
+
+    throw error;
   } finally {
     closeDatabase();
   }
