@@ -252,8 +252,11 @@ program
         throw new KlaudeError('Wait value must be numeric', 'E_INVALID_WAIT_VALUE');
       }
 
+      const fromSessionId = process.env.KLAUDE_SESSION_ID;
+
       const response = await requestCheckout(instance.socketPath, {
         sessionId: sessionId ?? undefined,
+        fromSessionId,
         waitSeconds,
       });
 

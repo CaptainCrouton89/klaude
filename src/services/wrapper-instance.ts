@@ -987,7 +987,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     }
     const waitSeconds = Math.max(0, waitSecondsRaw);
 
-    const currentSessionId = state.currentSessionId;
+    const currentSessionId = payload.fromSessionId ?? state.currentSessionId;
     const currentSession = getSessionById(currentSessionId);
     if (!currentSession) {
       throw new KlaudeError(
@@ -1035,6 +1035,10 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     }
 
     if (targetSessionId === currentSessionId && state.currentClaudeProcess) {
+      // Already on target session; no action needed
+      await recordSessionEvent(currentSessionId, 'wrapper.checkout.already_active', {
+        targetSessionId,
+      });
       return {
         sessionId: targetSessionId,
         claudeSessionId,

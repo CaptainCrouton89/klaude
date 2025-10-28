@@ -34,6 +34,7 @@ export interface StartAgentResponsePayload {
 
 export interface CheckoutRequestPayload {
   sessionId?: string;
+  fromSessionId?: string;
   waitSeconds?: number;
 }
 
