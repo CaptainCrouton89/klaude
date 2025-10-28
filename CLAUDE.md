@@ -58,7 +58,7 @@ npm run format        # prettier
 
 ## Hooks Setup
 
-Install in `~/.claude/settings.json`:
+Install in `./.claude/settings.local.json`:
 ```json
 {
   "hooks": {
