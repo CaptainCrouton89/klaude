@@ -7,6 +7,7 @@ import type {
   StartAgentRequestPayload,
   StartAgentResponsePayload,
   CheckoutRequestPayload,
+  CheckoutResponsePayload,
   MessageRequestPayload,
   InterruptRequestPayload,
 } from '@/types/instance-ipc.js';
@@ -163,8 +164,8 @@ export async function requestCheckout(
   socketPath: string,
   payload: CheckoutRequestPayload,
   options?: SendOptions,
-): Promise<InstanceResponse<unknown>> {
-  return await sendInstanceRequest(
+): Promise<InstanceResponse<CheckoutResponsePayload>> {
+  return await sendInstanceRequest<CheckoutResponsePayload>(
     socketPath,
     { action: 'checkout', payload },
     options,
