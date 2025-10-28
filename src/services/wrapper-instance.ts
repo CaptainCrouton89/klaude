@@ -27,12 +27,15 @@ import {
   getSessionById,
 } from '@/db/index.js';
 import { generateULID } from '@/utils/ulid.js';
-import {
-  getInstanceSocketPath,
-  getSessionLogPath,
-} from '@/utils/path-helper.js';
+import { getInstanceSocketPath, getSessionLogPath } from '@/utils/path-helper.js';
 import { KlaudeError } from '@/utils/error-handler.js';
-import type { InstanceRequest, InstanceStatusPayload } from '@/types/instance-ipc.js';
+import type {
+  InstanceRequest,
+  InstanceStatusPayload,
+  StartAgentRequestPayload,
+  StartAgentResponsePayload,
+} from '@/types/instance-ipc.js';
+import { VALID_AGENT_TYPES } from '@/config/constants.js';
 
 interface WrapperStartOptions {
   projectCwd?: string;
@@ -272,6 +275,91 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
   let currentClaudePid: number | null = null;
   let finalized = false;
 
+  const normalizeAgentType = (agentType: string): string => agentType.trim().toLowerCase();
+
+  const resolveAgentType = (agentType: string): string => {
+    const normalized = normalizeAgentType(agentType);
+    const match = VALID_AGENT_TYPES.find((candidate) => candidate.toLowerCase() === normalized);
+    if (!match) {
+      throw new KlaudeError(`Unknown agent type: ${agentType}`, 'E_AGENT_TYPE_INVALID');
+    }
+    return match;
+  };
+
+  const handleStartAgent = async (
+    payload: StartAgentRequestPayload,
+  ): Promise<StartAgentResponsePayload> => {
+    if (!payload.agentType || payload.agentType.trim().length === 0) {
+      throw new KlaudeError('Agent type is required', 'E_AGENT_TYPE_REQUIRED');
+    }
+    if (!payload.prompt || payload.prompt.trim().length === 0) {
+      throw new KlaudeError('Prompt is required for agent start', 'E_PROMPT_REQUIRED');
+    }
+
+    const agentType = resolveAgentType(payload.agentType);
+    const parentSessionId = payload.parentSessionId ?? rootSession.id;
+
+    const parentSession = getSessionById(parentSessionId);
+    if (!parentSession) {
+      throw new KlaudeError(
+        `Parent session ${parentSessionId} not found`,
+        'E_SESSION_NOT_FOUND',
+      );
+    }
+    if (parentSession.project_id !== project.id) {
+      throw new KlaudeError(
+        `Parent session ${parentSessionId} does not belong to this project`,
+        'E_SESSION_PROJECT_MISMATCH',
+      );
+    }
+
+    const metadata = {
+      agentType,
+      prompt: payload.prompt,
+      requestedAt: new Date().toISOString(),
+      instanceId,
+      agentCount: payload.agentCount ?? null,
+      options: payload.options ?? {},
+    };
+
+    const session = createSession(project.id, 'sdk', {
+      parentId: parentSession.id,
+      instanceId,
+      title: `${agentType} agent`,
+      prompt: payload.prompt,
+      metadataJson: JSON.stringify(metadata),
+    });
+
+    const sessionLogPath = getSessionLogPath(
+      context.projectHash,
+      session.id,
+      config.wrapper?.projectsDir,
+    );
+    await ensureLogFile(sessionLogPath);
+
+    createEvent(
+      'agent.session.created',
+      project.id,
+      session.id,
+      JSON.stringify({
+        agentType,
+        parentSessionId: parentSession.id,
+        options: payload.options ?? {},
+        agentCount: payload.agentCount ?? null,
+      }),
+    );
+
+    return {
+      sessionId: session.id,
+      status: session.status,
+      logPath: sessionLogPath,
+      agentType,
+      prompt: session.prompt ?? payload.prompt,
+      createdAt: session.created_at,
+      instanceId,
+    };
+  };
+
   const finalize = async (
     status: 'done' | 'failed' | 'interrupted',
     exitInfo: ClaudeExitResult | null,
@@ -322,6 +410,14 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
           };
           return payload;
         }
+        case 'start-agent':
+          return await handleStartAgent(request.payload);
+        case 'checkout':
+          throw new KlaudeError('Checkout is not implemented yet', 'E_CHECKOUT_UNAVAILABLE');
+        case 'message':
+          throw new KlaudeError('Messaging is not implemented yet', 'E_MESSAGE_UNAVAILABLE');
+        case 'interrupt':
+          throw new KlaudeError('Interrupt is not implemented yet', 'E_INTERRUPT_UNAVAILABLE');
         default:
           throw new KlaudeError(
             `Unsupported instance request: ${(request as { action?: string }).action ?? 'unknown'}`,

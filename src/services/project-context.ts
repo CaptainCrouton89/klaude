@@ -37,10 +37,10 @@ async function resolveCanonicalProjectRoot(cwd: string): Promise<string> {
 }
 
 /**
- * Derive SHA-256 hash for project path
+ * Derive SHA-256 hash for project path (first 24 chars for Unix socket path length)
  */
 function deriveProjectHash(projectRoot: string): string {
-  return createHash('sha256').update(projectRoot).digest('hex');
+  return createHash('sha256').update(projectRoot).digest('hex').slice(0, 24);
 }
 
 /**
