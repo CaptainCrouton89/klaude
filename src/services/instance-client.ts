@@ -4,6 +4,11 @@ import type {
   InstanceRequest,
   InstanceResponse,
   InstanceStatusPayload,
+  StartAgentRequestPayload,
+  StartAgentResponsePayload,
+  CheckoutRequestPayload,
+  MessageRequestPayload,
+  InterruptRequestPayload,
 } from '@/types/instance-ipc.js';
 
 interface SendOptions {
@@ -138,6 +143,54 @@ export async function getInstanceStatus(
   return await sendInstanceRequest<InstanceStatusPayload>(
     socketPath,
     { action: 'status' },
+    options,
+  );
+}
+
+export async function startAgentSession(
+  socketPath: string,
+  payload: StartAgentRequestPayload,
+  options?: SendOptions,
+): Promise<InstanceResponse<StartAgentResponsePayload>> {
+  return await sendInstanceRequest<StartAgentResponsePayload>(
+    socketPath,
+    { action: 'start-agent', payload },
+    options,
+  );
+}
+
+export async function requestCheckout(
+  socketPath: string,
+  payload: CheckoutRequestPayload,
+  options?: SendOptions,
+): Promise<InstanceResponse<unknown>> {
+  return await sendInstanceRequest(
+    socketPath,
+    { action: 'checkout', payload },
+    options,
+  );
+}
+
+export async function sendAgentMessage(
+  socketPath: string,
+  payload: MessageRequestPayload,
+  options?: SendOptions,
+): Promise<InstanceResponse<unknown>> {
+  return await sendInstanceRequest(
+    socketPath,
+    { action: 'message', payload },
+    options,
+  );
+}
+
+export async function interruptAgent(
+  socketPath: string,
+  payload: InterruptRequestPayload,
+  options?: SendOptions,
+): Promise<InstanceResponse<unknown>> {
+  return await sendInstanceRequest(
+    socketPath,
+    { action: 'interrupt', payload },
     options,
   );
 }
