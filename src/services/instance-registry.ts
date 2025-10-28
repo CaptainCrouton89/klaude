@@ -8,7 +8,7 @@ import path from 'path';
 
 const REGISTRY_VERSION = 1;
 const LOCK_RETRY_DELAY_MS = 25;
-const LOCK_TIMEOUT_MS = 2000;
+const LOCK_TIMEOUT_MS = 5000;
 
 export interface InstanceRegistryEntry {
   instanceId: string;

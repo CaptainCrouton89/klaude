@@ -14,6 +14,13 @@ import type {
 
 interface SendOptions {
   timeoutMs?: number;
+  debug?: boolean;
+}
+
+function debugLog(enabled: boolean, ...args: unknown[]): void {
+  if (enabled && process.env.KLAUDE_DEBUG) {
+    console.error('[instance-client]', ...args);
+  }
 }
 
 function createTimeout(
@@ -28,9 +35,18 @@ export async function sendInstanceRequest<T = unknown>(
   request: InstanceRequest,
   options: SendOptions = {},
 ): Promise<InstanceResponse<T>> {
-  const timeoutMs = options.timeoutMs ?? 2000;
+  const timeoutMs = typeof options.timeoutMs === 'number' ? options.timeoutMs : 15000;
+  const debug =
+    typeof options.debug === 'boolean' ? options.debug : process.env.KLAUDE_DEBUG === 'true';
 
   return await new Promise((resolve, reject) => {
+    const startTime = Date.now();
+    const action = typeof (request as { action?: string }).action === 'string'
+      ? (request as { action?: string }).action
+      : 'unknown';
+
+    debugLog(debug, `[send] action=${action}, socket=${socketPath}, timeout=${timeoutMs}ms`);
+
     const socket = net.createConnection(socketPath);
     let buffer = '';
     let settled = false;
@@ -48,6 +64,12 @@ export async function sendInstanceRequest<T = unknown>(
       settled = true;
       clearTimeout(timer);
       clear();
+      const elapsed = Date.now() - startTime;
+      if (payload.ok) {
+        debugLog(debug, `[recv] action=${action}, elapsed=${elapsed}ms, ok=true`);
+      } else {
+        debugLog(debug, `[recv] action=${action}, elapsed=${elapsed}ms, error=${payload.error?.code}`);
+      }
       resolve(payload);
     };
 
@@ -73,10 +95,12 @@ export async function sendInstanceRequest<T = unknown>(
     socket.setEncoding('utf8');
 
     socket.once('connect', () => {
+      debugLog(debug, `[connect] action=${action}`);
       socket.write(`${JSON.stringify(request)}\n`);
     });
 
     socket.on('data', (chunk) => {
+      debugLog(debug, `[data] action=${action}, bytes=${chunk.length}`);
       buffer += chunk;
       let newlineIndex = buffer.indexOf('\n');
       while (newlineIndex >= 0) {
@@ -88,6 +112,7 @@ export async function sendInstanceRequest<T = unknown>(
     });
 
     socket.on('end', () => {
+      debugLog(debug, `[end] action=${action}`);
       if (buffer.length > 0) {
         handleParsedResponse(buffer);
         buffer = '';
@@ -104,6 +129,7 @@ export async function sendInstanceRequest<T = unknown>(
     });
 
     socket.on('error', (error) => {
+      debugLog(debug, `[error] action=${action}, message=${error.message}`);
       if (settled) {
         return;
       }
@@ -114,6 +140,7 @@ export async function sendInstanceRequest<T = unknown>(
     });
 
     const timer = createTimeout(timeoutMs, () => {
+      debugLog(debug, `[timeout] action=${action}, waited=${timeoutMs}ms`);
       if (settled) {
         return;
       }

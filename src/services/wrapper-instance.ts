@@ -48,6 +48,12 @@ interface WrapperStartOptions {
   projectCwd?: string;
 }
 
+function debugLog(...args: unknown[]): void {
+  if (process.env.KLAUDE_DEBUG === 'true') {
+    console.error('[wrapper-instance]', ...args);
+  }
+}
+
 interface ClaudeExitResult {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -124,6 +130,7 @@ function handleSocketConnection(socket: net.Socket, handler: InstanceRequestHand
     try {
       request = JSON.parse(trimmed) as InstanceRequest;
     } catch {
+      debugLog('Invalid JSON received');
       respond({
         ok: false,
         error: {
@@ -134,15 +141,27 @@ function handleSocketConnection(socket: net.Socket, handler: InstanceRequestHand
       return;
     }
 
+    const action = typeof (request as { action?: string }).action === 'string'
+      ? (request as { action?: string }).action
+      : 'unknown';
+    const startTime = Date.now();
+    debugLog(`[handler-start] action=${action}`);
+
     void (async () => {
       try {
         const result = await handler(request);
+        const elapsed = Date.now() - startTime;
+        debugLog(`[handler-end] action=${action}, elapsed=${elapsed}ms, ok=true`);
         respond({
           ok: true,
           result,
         });
       } catch (error) {
+        const elapsed = Date.now() - startTime;
         if (error instanceof KlaudeError) {
+          debugLog(
+            `[handler-end] action=${action}, elapsed=${elapsed}ms, error=${error.code}`,
+          );
           respond({
             ok: false,
             error: {
@@ -154,6 +173,7 @@ function handleSocketConnection(socket: net.Socket, handler: InstanceRequestHand
         }
 
         const message = error instanceof Error ? error.message : String(error);
+        debugLog(`[handler-error] action=${action}, elapsed=${elapsed}ms, message=${message}`);
         respond({
           ok: false,
           error: {
@@ -884,6 +904,33 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     claudeProcess.once('error', (error) => {
       void handleClaudeError(sessionId, error as Error);
     });
+
+    // For fresh launches (not resuming), wait for the session-start hook to fire
+    // and populate the Claude session ID. This ensures the root session (and any
+    // subsequent subagents) always have a linked Claude session ID.
+    if (!options.resumeClaudeSessionId) {
+      const hookWaitSeconds = 10;
+      debugLog(
+        `[launch-hook-wait] Fresh launch, waiting up to ${hookWaitSeconds}s for session-start hook...`,
+      );
+      const hookStartTime = Date.now();
+
+      const claudeSessionId = await waitForClaudeSessionId(sessionId, hookWaitSeconds);
+      const hookElapsed = Date.now() - hookStartTime;
+      debugLog(`[launch-hook-done] elapsed=${hookElapsed}ms, found=${claudeSessionId !== null}`);
+
+      if (!claudeSessionId) {
+        // Hook failed to fire - this is a critical error
+        throw new KlaudeError(
+          `Claude session hook did not fire within ${hookWaitSeconds}s. ` +
+          `Ensure SessionStart hook is installed in ~/.claude/settings.json. ` +
+          `Required config:\n` +
+          `{\n  "hooks": {\n    "SessionStart": [{ "hooks": [{ "type": "command", "command": "klaude hook session-start" }] }],\n` +
+          `    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "klaude hook session-end" }] }]\n  }\n}`,
+          'E_HOOK_TIMEOUT',
+        );
+      }
+    }
   }
 
   async function handleClaudeExit(sessionId: string, exitResult: ClaudeExitResult): Promise<void> {
@@ -974,18 +1021,24 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
   async function handleCheckout(
     payload: CheckoutRequestPayload,
   ): Promise<CheckoutResponsePayload> {
+    const checkoutStart = Date.now();
+    debugLog(`[checkout-start] timestamp=${checkoutStart}`);
+
     if (state.pendingSwitch) {
       throw new KlaudeError('A checkout is already in progress', 'E_CHECKOUT_IN_PROGRESS');
     }
 
     const waitSecondsRaw =
-      payload.waitSeconds === undefined || payload.waitSeconds === null
-        ? 0
-        : Number(payload.waitSeconds);
+      typeof payload.waitSeconds === 'number'
+        ? payload.waitSeconds
+        : typeof payload.waitSeconds === 'string'
+          ? Number(payload.waitSeconds)
+          : 5; // Default to 5 seconds per PRD
     if (Number.isNaN(waitSecondsRaw)) {
       throw new KlaudeError('Wait value must be numeric', 'E_INVALID_WAIT_VALUE');
     }
     const waitSeconds = Math.max(0, waitSecondsRaw);
+    debugLog(`[checkout-config] waitSeconds=${waitSeconds}`);
 
     const currentSessionId = payload.fromSessionId ?? state.currentSessionId;
     const currentSession = getSessionById(currentSessionId);
@@ -1001,13 +1054,15 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         ? payload.sessionId.trim()
         : null;
 
-    const targetSessionId = requestedId ?? currentSession.parent_id;
+    const targetSessionId = requestedId !== null ? requestedId : currentSession.parent_id;
     if (!targetSessionId) {
       throw new KlaudeError(
         'Current session has no parent; specify a session id explicitly',
         'E_SWITCH_TARGET_MISSING',
       );
     }
+    const targetDisplay = requestedId !== null ? `${requestedId} (explicit)` : `${targetSessionId} (parent)`;
+    debugLog(`[checkout-target] ${targetDisplay}`);
 
     const targetSession = getSessionById(targetSessionId);
     if (!targetSession) {
@@ -1023,9 +1078,18 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       );
     }
 
-    const claudeSessionId =
-      targetSession.last_claude_session_id ??
-      (await waitForClaudeSessionId(targetSession.id, waitSeconds));
+    const claudeSessionStart = Date.now();
+    let claudeSessionId = targetSession.last_claude_session_id;
+    if (!claudeSessionId) {
+      debugLog(
+        `[checkout-wait] Waiting up to ${waitSeconds}s for Claude session ID...`,
+      );
+      claudeSessionId = await waitForClaudeSessionId(targetSession.id, waitSeconds);
+      const waitElapsed = Date.now() - claudeSessionStart;
+      debugLog(`[checkout-wait-done] elapsed=${waitElapsed}ms, found=${claudeSessionId !== null}`);
+    } else {
+      debugLog(`[checkout-cached] Using cached Claude session ID`);
+    }
 
     if (!claudeSessionId) {
       throw new KlaudeError(
@@ -1051,30 +1115,55 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     });
 
     if (!state.currentClaudeProcess) {
+      debugLog(`[checkout-launch] No current process, launching directly...`);
+      const launchStart = Date.now();
       await launchClaudeForSession(targetSessionId, {
         resumeClaudeSessionId: claudeSessionId,
         sourceSessionId: currentSessionId,
       });
+      const launchElapsed = Date.now() - launchStart;
+      debugLog(`[checkout-launch-done] elapsed=${launchElapsed}ms`);
+
+      const recordStart = Date.now();
       await recordSessionEvent(targetSessionId, 'wrapper.checkout.activated', {
         fromSessionId: currentSessionId,
         resumeSessionId: claudeSessionId,
       });
+      const recordElapsed = Date.now() - recordStart;
+      debugLog(`[checkout-record-done] elapsed=${recordElapsed}ms`);
+
+      const totalElapsed = Date.now() - checkoutStart;
+      debugLog(`[checkout-complete] totalElapsed=${totalElapsed}ms`);
+
       return {
         sessionId: targetSessionId,
         claudeSessionId,
       };
     }
 
+    debugLog(`[checkout-terminate] Current process exists, initiating switch...`);
+    const terminateStart = Date.now();
+
     return await new Promise<CheckoutResponsePayload>((resolve, reject) => {
       state.pendingSwitch = {
         targetSessionId,
         targetClaudeSessionId: claudeSessionId,
-        resolve: () => resolve({ sessionId: targetSessionId, claudeSessionId }),
-        reject,
+        resolve: () => {
+          const totalElapsed = Date.now() - checkoutStart;
+          debugLog(`[checkout-switched] totalElapsed=${totalElapsed}ms`);
+          resolve({ sessionId: targetSessionId, claudeSessionId });
+        },
+        reject: (error: unknown) => {
+          const totalElapsed = Date.now() - checkoutStart;
+          debugLog(`[checkout-switch-failed] totalElapsed=${totalElapsed}ms, error=${String(error)}`);
+          reject(error);
+        },
       };
 
       try {
         terminateCurrentClaudeProcess();
+        const terminateElapsed = Date.now() - terminateStart;
+        debugLog(`[checkout-terminate-sent] elapsed=${terminateElapsed}ms`);
       } catch (error) {
         state.pendingSwitch = null;
         reject(error);
