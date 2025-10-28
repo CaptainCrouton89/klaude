@@ -67,10 +67,15 @@ export async function handleSessionStartHook(payload: ClaudeHookPayload): Promis
       );
     }
 
-    createClaudeSessionLink(session.id, claudeSessionId, {
-      transcriptPath: payload.transcript_path ?? null,
-      source: payload.source ?? null,
-    });
+    // Check if this Claude session is already linked (e.g., from a previous `--resume`)
+    const existingLink = getClaudeSessionLink(claudeSessionId);
+    if (!existingLink) {
+      // First time seeing this Claude session ID - create the link
+      createClaudeSessionLink(session.id, claudeSessionId, {
+        transcriptPath: payload.transcript_path ?? null,
+        source: payload.source ?? null,
+      });
+    }
 
     updateSessionClaudeLink(session.id, claudeSessionId, payload.transcript_path ?? null);
 
