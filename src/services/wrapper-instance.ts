@@ -54,6 +54,12 @@ function debugLog(...args: unknown[]): void {
   }
 }
 
+function verboseLog(...args: unknown[]): void {
+  if (process.env.KLAUDE_DEBUG_VERBOSE === 'true') {
+    console.error('[wrapper-instance]', ...args);
+  }
+}
+
 interface ClaudeExitResult {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -434,7 +440,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         session.id,
         JSON.stringify(eventPayload),
       );
-      debugLog(`[event-created] kind=agent.session.created, sessionId=${session.id}`);
+      verboseLog(`[event-created] kind=agent.session.created, sessionId=${session.id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`Failed to record agent.session.created event: ${message}`);
@@ -458,7 +464,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
   async function recordSessionEvent(sessionId: string, kind: string, payload: unknown): Promise<void> {
     try {
       await createEvent(kind, projectRecord.id, sessionId, JSON.stringify(payload));
-      debugLog(`[event-recorded] kind=${kind}, sessionId=${sessionId}`);
+      verboseLog(`[event-recorded] kind=${kind}, sessionId=${sessionId}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[event-error] Failed to record event kind=${kind}: ${message}`);
@@ -934,7 +940,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
           sessionId,
           JSON.stringify(payload),
         );
-        debugLog(`[event-created] kind=wrapper.claude.spawned, pid=${claudeProcess.pid}`);
+        verboseLog(`[event-created] kind=wrapper.claude.spawned, pid=${claudeProcess.pid}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`Failed to record wrapper.claude.spawned event: ${message}`);
