@@ -451,7 +451,28 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     await appendSessionEvent(sessionLogPath, 'agent.session.created', eventPayload);
 
-    await startAgentRuntimeProcess(session, agentType, payload);
+    let shareResumeId: string | null = null;
+    if (payload.options?.share) {
+      try {
+        const parent = getSessionById(parentSession.id);
+        if (parent) {
+          // Prefer parent's active link, then latest link, else last_claude_session_id
+          const links = listClaudeSessionLinks(parent.id);
+          const active = links.find((l) => l.ended_at === null);
+          if (active) {
+            shareResumeId = active.claude_session_id;
+          } else if (links.length > 0) {
+            shareResumeId = links[0]!.claude_session_id;
+          } else if (parent.last_claude_session_id) {
+            shareResumeId = parent.last_claude_session_id;
+          }
+        }
+      } catch {
+        // ignore share selection failures
+      }
+    }
+
+    await startAgentRuntimeProcess(session, agentType, payload, shareResumeId);
 
     return {
       sessionId: session.id,

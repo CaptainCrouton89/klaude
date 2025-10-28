@@ -191,8 +191,9 @@ program
           `Checkout activated for session ${checkoutResult.sessionId} (resume ${checkoutResult.claudeSessionId}).`,
         );
       }
-      if (payload.options?.detach) {
-        console.log('Detached mode not yet available; session created for tracking only.');
+      // Attach to live log stream unless explicitly detached or we just checked out
+      if (!payload.options?.detach && !payload.options?.checkout) {
+        await tailSessionLog(result.logPath, { untilExit: true });
       }
     } catch (error) {
       printError(error);
@@ -341,6 +342,20 @@ program
       const status = result && typeof result.status === 'string' ? result.status : 'submitted';
       const queued = result && typeof result.messagesQueued === 'number' ? result.messagesQueued : 1;
       console.log(`Message ${status} (${queued} message${queued === 1 ? '' : 's'} queued).`);
+
+      if (waitSeconds && waitSeconds > 0) {
+        // Follow the session log briefly and stop on first assistant output
+        const config = await loadConfig();
+        const logPath = getSessionLogPath(
+          context.projectHash,
+          sessionId,
+          config.wrapper?.projectsDir,
+        );
+        const found = await waitForFirstAssistantOutput(logPath, waitSeconds);
+        if (!found) {
+          console.log(`(no response within ${waitSeconds}s)`);
+        }
+      }
     } catch (error) {
       printError(error);
       process.exitCode = process.exitCode ?? 1;
@@ -444,11 +459,8 @@ program
   .option('-C, --cwd <path>', 'Project directory override')
   .action(async (sessionId: string, options) => {
     try {
-      if (options.tail) {
-        throw new KlaudeError('Tail mode is not available yet', 'E_TAIL_UNAVAILABLE');
-      }
-      if (options.summary) {
-        throw new KlaudeError('Summary mode is not available yet', 'E_SUMMARY_UNAVAILABLE');
+      if (options.tail && options.summary) {
+        throw new KlaudeError('Choose either --tail or --summary', 'E_INVALID_FLAGS');
       }
 
       const projectCwd = resolveProjectDirectory(options.cwd);
@@ -462,13 +474,19 @@ program
       );
 
       try {
-        const content = await fsp.readFile(logPath, 'utf-8');
-        if (content.length === 0) {
-          console.log('(log is empty)');
+        if (options.tail) {
+          await tailSessionLog(logPath, { untilExit: false });
+        } else if (options.summary) {
+          await printSessionSummary(logPath);
         } else {
-          process.stdout.write(content);
-          if (!content.endsWith('\n')) {
-            process.stdout.write('\n');
+          const content = await fsp.readFile(logPath, 'utf-8');
+          if (content.length === 0) {
+            console.log('(log is empty)');
+          } else {
+            process.stdout.write(content);
+            if (!content.endsWith('\n')) {
+              process.stdout.write('\n');
+            }
           }
         }
       } catch (error) {
@@ -503,3 +521,270 @@ program.parseAsync(process.argv).catch((error) => {
   printError(error);
   process.exitCode = process.exitCode ?? 1;
 });
+
+// ----------------------
+// Helpers for read/tail
+// ----------------------
+
+async function tailSessionLog(
+  logPath: string,
+  options: { untilExit: boolean },
+): Promise<void> {
+  // Print existing content first
+  let position = 0;
+  try {
+    const content = await fsp.readFile(logPath, 'utf-8');
+    if (content.length > 0) {
+      process.stdout.write(content);
+      if (!content.endsWith('\n')) process.stdout.write('\n');
+      position = Buffer.byteLength(content, 'utf-8');
+    }
+  } catch {
+    // if not exists yet, start at 0 and wait
+    position = 0;
+  }
+
+  const { watch } = await import('node:fs');
+  let closing = false;
+  const stop = () => {
+    if (!closing) {
+      closing = true;
+    }
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+
+  // To determine end-of-session, watch for specific events in appended lines
+  const isTerminalEvent = (line: string): boolean => {
+    try {
+      const obj = JSON.parse(line);
+      if (obj && typeof obj === 'object' && typeof obj.kind === 'string') {
+        const k = obj.kind as string;
+        return (
+          k === 'agent.runtime.done' ||
+          k === 'agent.runtime.process.exited' ||
+          k === 'wrapper.finalized' ||
+          k === 'wrapper.claude.exited'
+        );
+      }
+    } catch {}
+    return false;
+  };
+
+  const readChunk = async (): Promise<void> => {
+    try {
+      const fh = await (await import('node:fs/promises')).open(logPath, 'r');
+      const stat = await fh.stat();
+      if (stat.size > position) {
+        const length = stat.size - position;
+        const buffer = Buffer.alloc(length);
+        await fh.read(buffer, 0, length, position);
+        position = stat.size;
+        fh.close().catch(() => {});
+        const text = buffer.toString('utf-8');
+        const lines = text.split('\n');
+        for (const line of lines) {
+          if (!line) continue;
+          process.stdout.write(line + '\n');
+          if (options.untilExit && isTerminalEvent(line)) {
+            stop();
+          }
+        }
+      } else {
+        fh.close().catch(() => {});
+      }
+    } catch (err) {
+      // ignore until file appears again
+    }
+  };
+
+  await readChunk();
+
+  const watcher = watch(logPath, { persistent: true });
+  await new Promise<void>((resolve) => {
+    watcher.on('change', async () => {
+      if (closing) return;
+      await readChunk();
+      if (closing) {
+        watcher.close();
+        resolve();
+      }
+    });
+    watcher.on('rename', async () => {
+      // file rotated/recreated
+      await readChunk();
+      if (closing) {
+        watcher.close();
+        resolve();
+      }
+    });
+    // Poll every 250ms in case change events are coalesced
+    const timer = setInterval(async () => {
+      if (closing) {
+        clearInterval(timer);
+        watcher.close();
+        resolve();
+        return;
+      }
+      await readChunk();
+      if (closing) {
+        clearInterval(timer);
+        watcher.close();
+        resolve();
+      }
+    }, 250).unref();
+  });
+}
+
+async function printSessionSummary(logPath: string): Promise<void> {
+  const content = await fsp.readFile(logPath, 'utf-8');
+  if (!content.trim()) {
+    console.log('(log is empty)');
+    return;
+  }
+  const lines = content.split('\n').filter(Boolean);
+  let createdAt: string | null = null;
+  let updatedAt: string | null = null;
+  let agentType: string | null = null;
+  let totalEvents = 0;
+  let messages = 0;
+  let results = 0;
+  let errors = 0;
+  let lastText: string | null = null;
+  const resumeIds = new Set<string>();
+
+  for (const line of lines) {
+    totalEvents++;
+    try {
+      const obj = JSON.parse(line) as { timestamp?: string; kind?: string; payload?: any };
+      if (obj.timestamp) {
+        if (!createdAt) createdAt = obj.timestamp;
+        updatedAt = obj.timestamp;
+      }
+      switch (obj.kind) {
+        case 'agent.session.created':
+          agentType = obj.payload?.agentType ?? agentType;
+          break;
+        case 'agent.runtime.message':
+          messages++;
+          if (typeof obj.payload?.text === 'string' && obj.payload.text.trim()) {
+            lastText = obj.payload.text;
+          }
+          break;
+        case 'agent.runtime.result':
+          results++;
+          if (typeof obj.payload?.result === 'string' && obj.payload.result.trim()) {
+            lastText = obj.payload.result;
+          }
+          break;
+        case 'agent.runtime.error':
+          errors++;
+          break;
+        case 'agent.runtime.claude-session':
+          if (typeof obj.payload?.sessionId === 'string') {
+            resumeIds.add(obj.payload.sessionId);
+          }
+          break;
+        case 'wrapper.checkout.resume_selected':
+          if (typeof obj.payload?.selectedResumeId === 'string') {
+            resumeIds.add(obj.payload.selectedResumeId);
+          }
+          break;
+      }
+    } catch {
+      // ignore parse failures
+    }
+  }
+
+  console.log(`agent: ${agentType ?? 'unknown'}`);
+  console.log(`events: ${totalEvents}, messages: ${messages}, results: ${results}, errors: ${errors}`);
+  if (createdAt) console.log(`created: ${createdAt}`);
+  if (updatedAt) console.log(`updated: ${updatedAt}`);
+  if (resumeIds.size > 0) console.log(`resume_ids: ${Array.from(resumeIds).join(', ')}`);
+  if (lastText) console.log(`last_text: ${lastText}`);
+}
+
+async function waitForFirstAssistantOutput(logPath: string, waitSeconds: number): Promise<boolean> {
+  const deadline = Date.now() + Math.max(0, waitSeconds) * 1000;
+  // Start from end of file
+  let position = 0;
+  try {
+    const stat = await (await import('node:fs/promises')).stat(logPath);
+    position = stat.size;
+  } catch {}
+
+  const { watch } = await import('node:fs');
+
+  const isAssistantLine = (line: string): boolean => {
+    try {
+      const obj = JSON.parse(line) as { kind?: string; payload?: any };
+      if (!obj || typeof obj !== 'object') return false;
+      if (obj.kind === 'agent.runtime.message') {
+        const t = obj.payload?.messageType;
+        return t === 'assistant' || t === 'stream_event';
+      }
+      if (obj.kind === 'agent.runtime.result') return true;
+    } catch {}
+    return false;
+  };
+
+  const readChunk = async (): Promise<string[]> => {
+    const chunks: string[] = [];
+    try {
+      const fh = await (await import('node:fs/promises')).open(logPath, 'r');
+      const stat = await fh.stat();
+      if (stat.size > position) {
+        const length = stat.size - position;
+        const buffer = Buffer.alloc(length);
+        await fh.read(buffer, 0, length, position);
+        position = stat.size;
+        fh.close().catch(() => {});
+        const text = buffer.toString('utf-8');
+        for (const line of text.split('\n')) {
+          if (line) chunks.push(line);
+        }
+      } else {
+        fh.close().catch(() => {});
+      }
+    } catch {}
+    return chunks;
+  };
+
+  // Quick pass in case something already landed
+  for (const line of await readChunk()) {
+    if (isAssistantLine(line)) {
+      const obj = JSON.parse(line);
+      if (typeof obj.payload?.text === 'string' && obj.payload.text) {
+        console.log(obj.payload.text);
+      }
+      return true;
+    }
+  }
+
+  const watcher = watch(logPath, { persistent: true });
+  return await new Promise<boolean>((resolve) => {
+    const check = async () => {
+      if (Date.now() >= deadline) {
+        watcher.close();
+        resolve(false);
+        return;
+      }
+      for (const line of await readChunk()) {
+        if (isAssistantLine(line)) {
+          try {
+            const obj = JSON.parse(line);
+            if (typeof obj.payload?.text === 'string' && obj.payload.text) {
+              console.log(obj.payload.text);
+            }
+          } catch {}
+          watcher.close();
+          resolve(true);
+          return;
+        }
+      }
+    };
+    watcher.on('change', check);
+    watcher.on('rename', check);
+    const timer = setInterval(check, 200).unref();
+  });
+}
