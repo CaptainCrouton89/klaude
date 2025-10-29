@@ -18,6 +18,7 @@ export const DEFAULT_CONFIG: KlaudeConfig = {
       "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js",
     socketDir: "~/.klaude/run",
     projectsDir: "~/.klaude/projects",
+    maxAgentDepth: 2,
     switch: {
       graceSeconds: 1,
     },

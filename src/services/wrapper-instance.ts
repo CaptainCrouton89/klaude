@@ -12,6 +12,7 @@ import {
 import type { AgentDefinition } from '@/services/agent-definitions.js';
 import type { ClaudeCliFlags, McpServerConfig } from '@/types/index.js';
 import {
+  calculateSessionDepth,
   closeDatabase,
   createClaudeSessionLink,
   createEvent,
@@ -473,6 +474,19 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
           );
         }
       }
+    }
+
+    // Validate agent depth does not exceed configured maximum
+    const config = await loadConfig();
+    const maxAgentDepth = config.wrapper?.maxAgentDepth ?? 3;
+    const parentDepth = calculateSessionDepth(parentSession.id);
+    const newAgentDepth = parentDepth + 1;
+
+    if (newAgentDepth > maxAgentDepth) {
+      throw new KlaudeError(
+        `Maximum agent depth (${maxAgentDepth}) exceeded. Parent at depth ${parentDepth}, cannot spawn child at depth ${newAgentDepth}.`,
+        'E_MAX_DEPTH_EXCEEDED',
+      );
     }
 
     // Load and resolve MCPs for this agent

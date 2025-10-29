@@ -3,19 +3,19 @@ import type { SessionLogEvent } from '@/types/index.js';
 
 /**
  * Tail a session log file, printing assistant messages to stdout.
- * Supports both verbose (raw JSON) and filtered (assistant text only) modes.
+ * Supports both raw (raw JSON) and filtered (assistant text only) modes.
  * Can optionally stop when terminal events are detected.
  */
 export async function tailSessionLog(
   logPath: string,
-  options: { untilExit: boolean; verbose?: boolean },
+  options: { untilExit: boolean; raw?: boolean },
 ): Promise<void> {
   // State for pretty printing assistant text only
-  const verbose = Boolean(options.verbose);
+  const raw = Boolean(options.raw);
   let printedStream = false;
 
   const handleLine = (line: string): void => {
-    if (verbose) {
+    if (raw) {
       process.stdout.write(line + '\n');
       return;
     }
