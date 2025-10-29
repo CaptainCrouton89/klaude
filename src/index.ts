@@ -439,7 +439,7 @@ program
         console.log(`  - Enter TUI:     klaude checkout ${result.sessionId}`);
         console.log(`  - Message:       klaude message ${result.sessionId} "<prompt>" --wait 5`);
         console.log(`  - Interrupt:     klaude interrupt ${result.sessionId}`);
-        console.log('Tip: keep working; this agent runs in the background. Use -v for debug details.');
+        console.log('Tip: agent started in detached mode. Use -v for debug details.');
       }
 
       if (payload.options?.checkout) {
@@ -530,6 +530,52 @@ program
 program
   .command('checkout')
   .description('Switch the Claude TUI to another Klaude session')
+  .argument('[sessionId]', 'Target session id (defaults to parent)')
+  .option('--wait <seconds>', 'Wait for hooks to deliver target session id', '5')
+  .option('--instance <id>', 'Target instance id')
+  .option('-C, --cwd <path>', 'Project directory override')
+  .action(async (sessionId: string | undefined, options: OptionValues) => {
+    try {
+      const projectCwd = resolveProjectDirectory(options.cwd);
+      const context = await prepareProjectContext(projectCwd);
+      const instance = await resolveInstanceForProject(context, {
+        instanceId: options.instance,
+      });
+
+      const waitSeconds =
+        options.wait === undefined || options.wait === null
+          ? undefined
+          : Number(options.wait);
+      if (waitSeconds !== undefined && Number.isNaN(waitSeconds)) {
+        throw new KlaudeError('Wait value must be numeric', 'E_INVALID_WAIT_VALUE');
+      }
+
+      const fromSessionId = process.env.KLAUDE_SESSION_ID;
+
+      const response = await requestCheckout(instance.socketPath, {
+        sessionId: sessionId ?? undefined,
+        fromSessionId,
+        waitSeconds,
+      });
+
+      if (!response.ok) {
+        throw new KlaudeError(response.error.message, response.error.code);
+      }
+
+      const result = response.result as { sessionId: string; claudeSessionId: string };
+      console.log(
+        `Checkout activated for session ${result.sessionId} (resume ${result.claudeSessionId}).`,
+      );
+    } catch (error) {
+      printError(error);
+      process.exitCode = process.exitCode ?? 1;
+    }
+  });
+
+// Alias for checkout command (implements documented command from Quick Start)
+program
+  .command('enter-agent')
+  .description('Switch the Claude TUI to another Klaude session (alias for checkout)')
   .argument('[sessionId]', 'Target session id (defaults to parent)')
   .option('--wait <seconds>', 'Wait for hooks to deliver target session id', '5')
   .option('--instance <id>', 'Target instance id')
