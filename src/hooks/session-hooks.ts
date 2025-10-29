@@ -40,6 +40,14 @@ export interface ClaudeHookPayload {
   hook_event_name?: string;
 }
 
+export interface PreUserMessagePayload {
+  message: string;
+  message_id?: string;
+  timestamp?: string;
+  session_id?: string;
+  [key: string]: unknown;
+}
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -298,4 +306,33 @@ export async function handleSessionEndHook(payload: ClaudeHookPayload): Promise<
   } finally {
     closeDatabase();
   }
+}
+
+export async function handlePreUserMessageHook(payload: PreUserMessagePayload): Promise<{
+  systemMessage?: string;
+}> {
+  // Check if we're in a klaude session; if not, return empty (allow through)
+  if (!process.env.KLAUDE_PROJECT_HASH) {
+    return {};
+  }
+
+  // Extract message text
+  const messageText = typeof payload.message === 'string' ? payload.message : '';
+
+  // Regex to detect @agent-<agent-name> pattern
+  // Captures agent name like: @agent-planner, @agent-context-engineer, etc.
+  const agentPattern = /@agent-([a-zA-Z0-9\-]+)/;
+  const match = messageText.match(agentPattern);
+
+  if (!match || !match[1]) {
+    // No @agent- pattern found, pass through
+    return {};
+  }
+
+  const agentName = match[1];
+
+  // Generate system reminder suggesting klaude start command (without copying large prompts)
+  const systemMessage = `<system-reminder>Use \`klaude start ${agentName} "<your-prompt>" --attach\` to spawn this agent.</system-reminder>`;
+
+  return { systemMessage };
 }

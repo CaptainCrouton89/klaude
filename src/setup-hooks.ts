@@ -28,6 +28,11 @@ const KLAUDE_HOOKS: Record<string, Hook[]> = {
       hooks: [{ type: 'command', command: 'klaude hook task' }],
     },
   ],
+  PreUserMessage: [
+    {
+      hooks: [{ type: 'command', command: 'klaude hook pre-user-message' }],
+    },
+  ],
   SessionStart: [
     {
       matcher: 'startup',

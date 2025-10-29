@@ -7,8 +7,9 @@ import { Command, OptionValues } from 'commander';
 import {
   handleSessionEndHook,
   handleSessionStartHook,
+  handlePreUserMessageHook,
 } from '@/hooks/session-hooks.js';
-import type { ClaudeHookPayload } from '@/hooks/session-hooks.js';
+import type { ClaudeHookPayload, PreUserMessagePayload } from '@/hooks/session-hooks.js';
 import { setupHooks } from '@/setup-hooks.js';
 import { listInstances } from '@/services/instance-registry.js';
 import { prepareProjectContext } from '@/services/project-context.js';
@@ -275,6 +276,65 @@ To switch to an agent:
           process.stdout.write(JSON.stringify(response) + '\n');
         }
         // For other tools, allow them (no response needed)
+      }),
+  )
+  .addCommand(
+    new Command('pre-user-message')
+      .description('Handle Claude PreUserMessage hook for @agent- pattern detection')
+      .action(async () => {
+        // Check if we're in a klaude session; if not, allow all messages
+        if (!process.env.KLAUDE_PROJECT_HASH) {
+          return; // Allow message through (no response = allowed)
+        }
+
+        try {
+          const rawPayload = await readStdin();
+          if (!rawPayload) {
+            // No payload provided; allow message through
+            return;
+          }
+
+          let payload: unknown;
+          try {
+            payload = JSON.parse(rawPayload);
+          } catch (parseError) {
+            throw new KlaudeError(
+              `Invalid hook payload JSON: ${(parseError as Error).message}`,
+              'E_HOOK_PAYLOAD_INVALID',
+            );
+          }
+
+          const result = await handlePreUserMessageHook(payload as PreUserMessagePayload);
+
+          if (result.systemMessage) {
+            const response = {
+              hookSpecificOutput: {
+                hookEventName: 'PreUserMessage',
+                systemMessage: result.systemMessage,
+              },
+            };
+            process.stdout.write(JSON.stringify(response) + '\n');
+          }
+          // If no system message (no @agent- pattern detected), no response = allow through
+        } catch (error) {
+          let msg: string;
+          let code: string;
+
+          if (error instanceof KlaudeError) {
+            msg = error.message;
+            code = error.code;
+          } else if (error instanceof Error) {
+            msg = error.message;
+            code = 'UNKNOWN';
+          } else {
+            msg = String(error);
+            code = 'UNKNOWN';
+          }
+
+          console.error(`PreUserMessage hook failed: code=${code}, error=${msg}`);
+          printError(error);
+          throw error;
+        }
       }),
   );
 
