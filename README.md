@@ -51,36 +51,60 @@ klaude <command> [options]
 Commands:
   klaude
     Description: Starts the wrapper for that directory and creates a brand new TUI claude code agent as the root.
+
   klaude start <agent_type> <prompt> [agent_count] [options]
     Description: Spawns an agent (type loaded from agents directory) to perform the task. Agent prompt is appended with instructions on updating the parent. Streams response back to the terminal continuously, but also saved in klaude session.
     Agent Type: Name of any agent definition in your agents directory (e.g., `orchestrator`, `programmer`, `context-engineer`, or custom agents).
     Options:
-      -c, --checkout  Checks out the agent immediately after starting, without interrupting it.
-      -s, --share     Shares current context (last X messages) with the new agent.
-      -d, --detach    Start without streaming back output (for daemonized agents).
+      -c, --checkout       Checks out the agent immediately after starting
+      -s, --share          Shares current context (last X messages) with the new agent
+      -d, --detach         Start without streaming back output (detached mode - default)
+      --attach             Attach to agent stream in foreground (opposite of --detach)
+      -v, --verbose        Show detailed debug information
+      --instance <id>      Target specific wrapper instance
     Returns: The process and session ID of the started agent.
 
   klaude checkout [id]
     Description: Interrupts the current agent (cli), exits it, then enters the specified agent's session without interrupting the target agent. If no ID is provided, enters parent agent.
+    Options:
+      --wait <seconds>     Wait for hooks to deliver target session id (default: 5)
+      --instance <id>      Target specific wrapper instance
+
+  enter-agent [id]
+    Description: Alias for `klaude checkout` - switches to another agent session.
 
   klaude message <id> <prompt> [options]
     Description: Sends an asynchronous message to the specified agent.
     Options:
-      -w, --wait      Blocks until the agent responds to the message (max 30 seconds)
+      -w, --wait <seconds> Blocks until the agent responds (default: 5 seconds)
+      --instance <id>      Target specific wrapper instance
 
   klaude interrupt <id>
     Description: Interrupts the specified agent's current operation.
+    Options:
+      --signal <signal>    Signal to send (default: SIGINT)
+      --instance <id>      Target specific wrapper instance
 
   klaude sessions [options]
     Description: Views active klaude sessions, showing a brief description, first, and last message for each.
     Options:
-      -v              Displays more detailed information for each session.
+      -v, --verbose        Displays more detailed information for each session
 
   klaude read <id> [options]
     Description: Reads the full response logs for the specified session.
     Options:
-      -t, --tail      Tails the logs (tail -f style)
-      -s, --summary   Summarize the session
+      -t, --tail           Tails the logs (tail -f style)
+      -s, --summary        Summarize the session
+      -v, --verbose        Show raw JSON events instead of filtered output
+      --instance <id>      Target specific wrapper instance for live tailing
+
+  klaude instances [options]
+    Description: List all active wrapper instances for the current project.
+    Options:
+      --status             Query live status from active instances
+
+  klaude setup-hooks
+    Description: Install Klaude hooks to ~/.claude/settings.json for session management
 
 Klaude is stateful—session data persists in SQLite after you exit. You can resume or inspect previous sessions later.
 
@@ -90,24 +114,31 @@ Agents can be configured with specific MCP (Model Context Protocol) servers, giv
 
 ### Global MCP Registry
 
-Define available MCP servers in `~/.klaude/config.yaml` or project `.mcp.json`:
+Define available MCP servers in `~/.klaude/.mcp.json` or project `.mcp.json`:
 
-**~/.klaude/config.yaml:**
-```yaml
-mcpServers:
-  sql:
-    type: stdio
-    command: npx
-    args: [-y, '@modelcontextprotocol/server-postgres']
-    env:
-      DATABASE_URL: postgresql://localhost/mydb
-  json:
-    type: stdio
-    command: npx
-    args: [-y, '@anthropic-ai/mcp-json']
-  github:
-    type: http
-    url: https://api.githubcopilot.com/mcp/
+**~/.klaude/.mcp.json** (klaude global MCP registry):
+```json
+{
+  "mcpServers": {
+    "sql": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {
+        "DATABASE_URL": "postgresql://localhost/mydb"
+      }
+    },
+    "json": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-json"]
+    },
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/"
+    }
+  }
+}
 ```
 
 **Project `.mcp.json`** (standard Claude Code format):

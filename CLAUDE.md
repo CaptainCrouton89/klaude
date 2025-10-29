@@ -108,9 +108,9 @@ Wrapper exports: `KLAUDE_PROJECT_HASH`, `KLAUDE_INSTANCE_ID`, `KLAUDE_SESSION_ID
 ✓ DB + models (ULID, SQLite schema)
 ✓ Wrapper loop (socket server, Claude spawn/kill)
 ✓ Hooks (session-start/session-end)
-◐ Agent runtime (SDK runner, event streaming)
-◐ MCP server configuration (resolution logic)
-○ UX polish (sessions -v, read -t, error handling)
+✓ Agent runtime (SDK runner, event streaming)
+✓ MCP server configuration (resolution logic)
+✓ UX polish (sessions -v, read -t/-s, error handling, complete docs)
 
 ## Core Files
 
