@@ -9,6 +9,7 @@ import {
   handleSessionStartHook,
 } from '@/hooks/session-hooks.js';
 import type { ClaudeHookPayload } from '@/hooks/session-hooks.js';
+import { setupHooks } from '@/setup-hooks.js';
 import { listInstances } from '@/services/instance-registry.js';
 import { prepareProjectContext } from '@/services/project-context.js';
 import {
@@ -221,6 +222,11 @@ program
     new Command('task')
       .description('Handle Claude PreToolUse hook for Task tool blocking')
       .action(async () => {
+        // Check if we're in a klaude session; if not, allow all tools
+        if (!process.env.KLAUDE_PROJECT_HASH) {
+          return; // Allow all tools (no response = allowed)
+        }
+
         let rawPayload: string;
         try {
           rawPayload = await readStdin();
@@ -271,6 +277,18 @@ To switch to an agent:
         // For other tools, allow them (no response needed)
       }),
   );
+
+program
+  .command('setup-hooks')
+  .description('Install Klaude hooks to ~/.claude/settings.json')
+  .action(async () => {
+    try {
+      setupHooks();
+    } catch (error) {
+      printError(error);
+      process.exitCode = process.exitCode ?? 1;
+    }
+  });
 
 program
   .command('start')

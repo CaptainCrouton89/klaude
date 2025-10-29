@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc && tsc-alias",
+    "postinstall": "node dist/setup-hooks.js || true",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
