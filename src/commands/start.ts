@@ -19,8 +19,7 @@ export function registerStartCommand(program: Command): void {
     .argument('[agentCount]', 'Optional agent count for fan-out requests')
     .option('-c, --checkout', 'Request immediate checkout after start')
     .option('-s, --share', 'Share current context with the new agent')
-    .option('-d, --detach', 'Do not attach to the agent stream')
-    .option('--attach', 'Attach to the agent stream (prints assistant text only)')
+    .option('-a, --attach', 'Attach to agent stream (blocks until completion)')
     .option('-v, --verbose', 'Verbose: print debug details (instance, log path)')
     .option('--instance <id>', 'Target instance id')
     .option('-C, --cwd <path>', 'Project directory override')
@@ -47,7 +46,6 @@ export function registerStartCommand(program: Command): void {
           options: {
             checkout: Boolean(options.checkout),
             share: Boolean(options.share),
-            detach: Boolean(options.detach),
           },
         };
 
@@ -69,11 +67,12 @@ export function registerStartCommand(program: Command): void {
         if (!options.verbose && !options.attach) {
           console.log(`session: ${result.sessionId} (agent=${result.agentType})`);
           console.log('Next steps:');
-          console.log(`  - Tail output:   klaude read ${result.sessionId} -t`);
+          console.log(`  - Tail output:   klaude logs ${result.sessionId} -f`);
+          console.log(`  - Check status:  klaude status ${result.sessionId}`);
+          console.log(`  - Wait for done: klaude wait ${result.sessionId}`);
           console.log(`  - Enter TUI:     klaude checkout ${result.sessionId}`);
-          console.log(`  - Message:       klaude message ${result.sessionId} "<prompt>" --wait 5`);
+          console.log(`  - Message:       klaude message ${result.sessionId} "<prompt>" --timeout 5`);
           console.log(`  - Interrupt:     klaude interrupt ${result.sessionId}`);
-          console.log('Tip: keep working; this agent runs in the background. Use -v for debug details.');
         }
 
         if (payload.options?.checkout) {
@@ -95,7 +94,7 @@ export function registerStartCommand(program: Command): void {
         }
         // Attach only if explicitly requested
         if (options.attach && !payload.options?.checkout) {
-          await tailSessionLog(result.logPath, { untilExit: true, verbose: Boolean(options.verbose) });
+          await tailSessionLog(result.logPath, { untilExit: true, raw: Boolean(options.verbose) });
         }
       } catch (error) {
         printError(error);

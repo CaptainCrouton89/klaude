@@ -14,7 +14,7 @@ export function registerEnterAgentCommand(program: Command): void {
     .command('enter-agent')
     .description('Switch the Claude TUI to another Klaude session (alias for checkout)')
     .argument('[sessionId]', 'Target session id (defaults to parent)')
-    .option('--wait <seconds>', 'Wait for hooks to deliver target session id', '5')
+    .option('--timeout <seconds>', 'Wait for hooks to deliver target session id', '5')
     .option('--instance <id>', 'Target instance id')
     .option('-C, --cwd <path>', 'Project directory override')
     .action(async (sessionId: string | undefined, options: OptionValues) => {
@@ -25,12 +25,12 @@ export function registerEnterAgentCommand(program: Command): void {
           instanceId: options.instance,
         });
 
-        const waitSeconds =
-          options.wait === undefined || options.wait === null
+        const timeoutSeconds =
+          options.timeout === undefined || options.timeout === null
             ? undefined
-            : Number(options.wait);
-        if (waitSeconds !== undefined && Number.isNaN(waitSeconds)) {
-          throw new KlaudeError('Wait value must be numeric', 'E_INVALID_WAIT_VALUE');
+            : Number(options.timeout);
+        if (timeoutSeconds !== undefined && Number.isNaN(timeoutSeconds)) {
+          throw new KlaudeError('Timeout value must be numeric', 'E_INVALID_TIMEOUT_VALUE');
         }
 
         const fromSessionId = process.env.KLAUDE_SESSION_ID;
@@ -38,7 +38,7 @@ export function registerEnterAgentCommand(program: Command): void {
         const response = await requestCheckout(instance.socketPath, {
           sessionId: sessionId ?? undefined,
           fromSessionId,
-          waitSeconds,
+          waitSeconds: timeoutSeconds,
         });
 
         if (!response.ok) {

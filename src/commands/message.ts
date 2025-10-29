@@ -18,7 +18,7 @@ export function registerMessageCommand(program: Command): void {
     .description('Send a message to a running agent session')
     .argument('<sessionId>', 'Target session id')
     .argument('<prompt>', 'Message content')
-    .option('-w, --wait <seconds>', 'Wait for response (default 5)', '5')
+    .option('--timeout <seconds>', 'Wait for response (default 5)', '5')
     .option('--instance <id>', 'Target instance id')
     .option('-C, --cwd <path>', 'Project directory override')
     .action(async (sessionId: string, prompt: string, options: OptionValues) => {
@@ -29,18 +29,18 @@ export function registerMessageCommand(program: Command): void {
           instanceId: options.instance,
         });
 
-        const waitSeconds =
-          options.wait === undefined || options.wait === null
+        const timeoutSeconds =
+          options.timeout === undefined || options.timeout === null
             ? undefined
-            : Number(options.wait);
-        if (waitSeconds !== undefined && Number.isNaN(waitSeconds)) {
-          throw new KlaudeError('Wait value must be numeric', 'E_INVALID_WAIT_VALUE');
+            : Number(options.timeout);
+        if (timeoutSeconds !== undefined && Number.isNaN(timeoutSeconds)) {
+          throw new KlaudeError('Timeout value must be numeric', 'E_INVALID_TIMEOUT_VALUE');
         }
 
         const response = await sendAgentMessage(instance.socketPath, {
           sessionId,
           prompt,
-          waitSeconds,
+          waitSeconds: timeoutSeconds,
         });
 
         if (!response.ok) {
@@ -52,7 +52,7 @@ export function registerMessageCommand(program: Command): void {
         const queued = result && typeof result.messagesQueued === 'number' ? result.messagesQueued : 1;
         console.log(`Message ${status} (${queued} message${queued === 1 ? '' : 's'} queued).`);
 
-        if (waitSeconds && waitSeconds > 0) {
+        if (timeoutSeconds && timeoutSeconds > 0) {
           // Follow the session log briefly and stop on first assistant output
           const config = await loadConfig();
           const logPath = getSessionLogPath(
@@ -60,9 +60,9 @@ export function registerMessageCommand(program: Command): void {
             sessionId,
             config.wrapper?.projectsDir,
           );
-          const found = await waitForFirstAssistantOutput(logPath, waitSeconds);
+          const found = await waitForFirstAssistantOutput(logPath, timeoutSeconds);
           if (!found) {
-            console.log(`(no response within ${waitSeconds}s)`);
+            console.log(`(no response within ${timeoutSeconds}s)`);
           }
         }
       } catch (error) {
