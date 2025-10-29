@@ -19,6 +19,8 @@ import type {
   SDKPartialAssistantMessage,
   SDKResultMessage,
   SDKUserMessage,
+  HookInput,
+  HookJSONOutput,
 } from '@anthropic-ai/claude-agent-sdk';
 
 type PermissionMode = QueryOptions['permissionMode'];
@@ -229,17 +231,76 @@ async function* createMessageStream(
   emit({ type: 'log', level: 'info', message: 'Message stream closed' });
 }
 
+/**
+ * Hook callback that blocks the Task tool and redirects to klaude commands
+ */
+async function blockTaskToolHook(
+  input: HookInput,
+  _toolUseID: string | undefined,
+  _options: { signal: AbortSignal },
+): Promise<HookJSONOutput> {
+  if (input.hook_event_name !== 'PreToolUse') {
+    return {};
+  }
+
+  // Block Task tool usage
+  if (input.tool_name === 'Task') {
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: `ERROR: The Task tool is blocked in klaude sessions. Use the klaude tool instead to spawn and manage agents.
+
+To spawn an agent, use:
+  klaude start <agent_type> <prompt> [options]
+
+Available options:
+  --attach    Attach to agent in foreground (blocks until complete)
+  --detach    Run agent in background (default)
+
+Example:
+  klaude start context-engineer "Find all authentication patterns" --attach
+
+To list running agents:
+  klaude sessions
+
+To switch to an agent:
+  klaude checkout <session_id>`,
+      },
+    };
+  }
+
+  return {};
+}
+
 function buildQueryOptions(
   init: RuntimeInitPayload,
   abortController: AbortController,
 ): QueryOptions {
+  // Klaude agents run in bypassPermissions mode by default
+  const permissionMode: PermissionMode = init.sdk?.permissionMode ? init.sdk.permissionMode : 'bypassPermissions';
+
   const options: QueryOptions = {
     abortController,
     includePartialMessages: true,
-    permissionMode: init.sdk?.permissionMode ?? 'bypassPermissions',
-    model: init.sdk?.model ?? undefined,
-    fallbackModel: init.sdk?.fallbackModel ?? undefined,
+    permissionMode,
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: 'Task',
+          hooks: [blockTaskToolHook],
+        },
+      ],
+    },
   };
+
+  // Add optional model settings if provided
+  if (init.sdk?.model) {
+    options.model = init.sdk.model;
+  }
+  if (init.sdk?.fallbackModel) {
+    options.fallbackModel = init.sdk.fallbackModel;
+  }
 
   // Continue a specific Claude session if requested
   if (typeof init.resumeClaudeSessionId === 'string' && init.resumeClaudeSessionId.trim().length > 0) {

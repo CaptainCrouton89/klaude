@@ -111,71 +111,166 @@ async function readStdin(): Promise<string> {
 program
   .command('hook')
   .description('Internal hook command invoked by Claude')
-  .argument('<event>', 'Hook event (session-start | session-end)')
-  .action(async (event: string) => {
-    const startTime = Date.now();
-    const logLine = (msg: string) => {
-      const timestamp = new Date().toISOString();
-      const line = `[${timestamp}] [hook:${event}] ${msg}`;
-      console.error(line);
-      // Also write to persistent log
-      fsp.appendFile('/tmp/klaude-hook.log', line + '\n').catch(() => {});
-    };
+  .addCommand(
+    new Command('session-start')
+      .description('Handle Claude session start hook')
+      .action(async () => {
+        const event = 'session-start';
+        const startTime = Date.now();
+        const logLine = (msg: string) => {
+          const timestamp = new Date().toISOString();
+          const line = `[${timestamp}] [hook:${event}] ${msg}`;
+          console.error(line);
+          // Also write to persistent log (ignore write errors)
+          fsp.appendFile('/tmp/klaude-hook.log', line + '\n').catch((logError) => {
+            // Silently ignore log file write failures
+            void logError;
+          });
+        };
 
-    logLine(`HOOK STARTED - event=${event}, pid=${process.pid}`);
-    logLine(`Environment: KLAUDE_PROJECT_HASH=${process.env.KLAUDE_PROJECT_HASH}, KLAUDE_SESSION_ID=${process.env.KLAUDE_SESSION_ID}, KLAUDE_INSTANCE_ID=${process.env.KLAUDE_INSTANCE_ID}`);
-    logLine(`All env vars: ${JSON.stringify(process.env, null, 2)}`);
+        logLine(`HOOK STARTED - event=${event}, pid=${process.pid}`);
 
-    try {
-      logLine('Reading payload from stdin...');
-      const rawPayload = await readStdin();
-      logLine(`Received payload (${rawPayload.length} bytes): ${rawPayload.slice(0, 200)}`);
+        try {
+          logLine('Reading payload from stdin...');
+          const rawPayload = await readStdin();
+          logLine(`Received payload (${rawPayload.length} bytes)`);
 
-      if (!rawPayload) {
-        throw new KlaudeError('Hook payload required on stdin', 'E_HOOK_PAYLOAD_MISSING');
-      }
+          if (!rawPayload) {
+            throw new KlaudeError('Hook payload required on stdin', 'E_HOOK_PAYLOAD_MISSING');
+          }
 
-      let payload: unknown;
-      try {
-        logLine('Parsing JSON payload...');
-        payload = JSON.parse(rawPayload);
-        logLine(`Parsed payload: ${JSON.stringify(payload)}`);
-      } catch (error) {
-        throw new KlaudeError(
-          `Invalid hook payload JSON: ${(error as Error).message}`,
-          'E_HOOK_PAYLOAD_INVALID',
-        );
-      }
+          let payload: unknown;
+          try {
+            logLine('Parsing JSON payload...');
+            payload = JSON.parse(rawPayload);
+          } catch (error) {
+            throw new KlaudeError(
+              `Invalid hook payload JSON: ${(error as Error).message}`,
+              'E_HOOK_PAYLOAD_INVALID',
+            );
+          }
 
-      logLine(`Dispatching to handler for event: ${event}`);
-      switch (event) {
-        case 'session-start':
           await handleSessionStartHook(payload as ClaudeHookPayload);
-          break;
-        case 'session-end':
-          await handleSessionEndHook(payload as ClaudeHookPayload);
-          break;
-        default:
-          throw new KlaudeError(
-            `Unsupported hook event: ${event}`,
-            'E_UNSUPPORTED_HOOK_EVENT',
-          );
-      }
 
-      const elapsed = Date.now() - startTime;
-      logLine(`HOOK SUCCEEDED - elapsed=${elapsed}ms`);
-    } catch (error) {
-      const elapsed = Date.now() - startTime;
-      const msg = error instanceof Error ? error.message : String(error);
-      const code = error instanceof KlaudeError ? error.code : 'UNKNOWN';
-      logLine(`HOOK FAILED - code=${code}, elapsed=${elapsed}ms, error=${msg}`);
-      if (error instanceof Error && error.stack) {
-        logLine(`Stack: ${error.stack}`);
-      }
-      printError(error);
-      process.exitCode = process.exitCode ?? 1;
-    }
-  });
+          const elapsed = Date.now() - startTime;
+          logLine(`HOOK SUCCEEDED - elapsed=${elapsed}ms`);
+        } catch (error) {
+          const elapsed = Date.now() - startTime;
+          const msg = error instanceof Error ? error.message : String(error);
+          const code = error instanceof KlaudeError ? error.code : 'UNKNOWN';
+          logLine(`HOOK FAILED - code=${code}, elapsed=${elapsed}ms, error=${msg}`);
+          printError(error);
+          throw error;
+        }
+      }),
+  )
+  .addCommand(
+    new Command('session-end')
+      .description('Handle Claude session end hook')
+      .action(async () => {
+        const event = 'session-end';
+        const startTime = Date.now();
+        const logLine = (msg: string) => {
+          const timestamp = new Date().toISOString();
+          const line = `[${timestamp}] [hook:${event}] ${msg}`;
+          console.error(line);
+          // Also write to persistent log (ignore write errors)
+          fsp.appendFile('/tmp/klaude-hook.log', line + '\n').catch((logError) => {
+            // Silently ignore log file write failures
+            void logError;
+          });
+        };
+
+        logLine(`HOOK STARTED - event=${event}, pid=${process.pid}`);
+
+        try {
+          logLine('Reading payload from stdin...');
+          const rawPayload = await readStdin();
+          logLine(`Received payload (${rawPayload.length} bytes)`);
+
+          if (!rawPayload) {
+            throw new KlaudeError('Hook payload required on stdin', 'E_HOOK_PAYLOAD_MISSING');
+          }
+
+          let payload: unknown;
+          try {
+            logLine('Parsing JSON payload...');
+            payload = JSON.parse(rawPayload);
+          } catch (error) {
+            throw new KlaudeError(
+              `Invalid hook payload JSON: ${(error as Error).message}`,
+              'E_HOOK_PAYLOAD_INVALID',
+            );
+          }
+
+          await handleSessionEndHook(payload as ClaudeHookPayload);
+
+          const elapsed = Date.now() - startTime;
+          logLine(`HOOK SUCCEEDED - elapsed=${elapsed}ms`);
+        } catch (error) {
+          const elapsed = Date.now() - startTime;
+          const msg = error instanceof Error ? error.message : String(error);
+          const code = error instanceof KlaudeError ? error.code : 'UNKNOWN';
+          logLine(`HOOK FAILED - code=${code}, elapsed=${elapsed}ms, error=${msg}`);
+          printError(error);
+          throw error;
+        }
+      }),
+  )
+  .addCommand(
+    new Command('task')
+      .description('Handle Claude PreToolUse hook for Task tool blocking')
+      .action(async () => {
+        let rawPayload: string;
+        try {
+          rawPayload = await readStdin();
+        } catch (stdinError) {
+          const msg = stdinError instanceof Error ? stdinError.message : String(stdinError);
+          console.error(`Task hook: Failed to read stdin: ${msg}`);
+          process.exitCode = 1;
+          return;
+        }
+
+        let payload: unknown;
+        try {
+          payload = JSON.parse(rawPayload);
+        } catch (parseError) {
+          console.error(`Task hook: Failed to parse JSON payload: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+          process.exitCode = 1;
+          return;
+        }
+
+        const toolName = (payload as { tool_name?: string }).tool_name;
+
+        if (toolName === 'Task') {
+          const response = {
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason: `ERROR: The Task tool is blocked in klaude sessions. Use the klaude tool instead to spawn and manage agents.
+
+To spawn an agent, use:
+  klaude start <agent_type> <prompt> [options]
+
+Available options:
+  --attach    Attach to agent in foreground (blocks until complete)
+  --detach    Run agent in background (default)
+
+Example:
+  klaude start context-engineer "Find all authentication patterns" --attach
+
+To list running agents:
+  klaude sessions
+
+To switch to an agent:
+  klaude checkout <session_id>`,
+            },
+          };
+          process.stdout.write(JSON.stringify(response) + '\n');
+        }
+        // For other tools, allow them (no response needed)
+      }),
+  );
 
 program
   .command('start')
@@ -231,8 +326,8 @@ program
         console.log(`Log: ${result.logPath}`);
       }
 
-      // By default, print concise, agent-friendly hints
-      if (!options.verbose) {
+      // By default, print concise, agent-friendly hints (but not in attach mode)
+      if (!options.verbose && !options.attach) {
         console.log(`session: ${result.sessionId} (agent=${result.agentType})`);
         console.log('Next steps:');
         console.log(`  - Tail output:   klaude read ${result.sessionId} -t`);
@@ -603,47 +698,6 @@ async function tailSessionLog(
   logPath: string,
   options: { untilExit: boolean; verbose?: boolean },
 ): Promise<void> {
-  // Print existing content first
-  let position = 0;
-  try {
-    const content = await fsp.readFile(logPath, 'utf-8');
-    if (content.length > 0) {
-      process.stdout.write(content);
-      if (!content.endsWith('\n')) process.stdout.write('\n');
-      position = Buffer.byteLength(content, 'utf-8');
-    }
-  } catch {
-    // if not exists yet, start at 0 and wait
-    position = 0;
-  }
-
-  const { watch } = await import('node:fs');
-  let closing = false;
-  const stop = () => {
-    if (!closing) {
-      closing = true;
-    }
-  };
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
-
-  // To determine end-of-session, watch for specific events in appended lines
-  const isTerminalEvent = (line: string): boolean => {
-    try {
-      const obj = JSON.parse(line);
-      if (obj && typeof obj === 'object' && typeof obj.kind === 'string') {
-        const k = obj.kind as string;
-        return (
-          k === 'agent.runtime.done' ||
-          k === 'agent.runtime.process.exited' ||
-          k === 'wrapper.finalized' ||
-          k === 'wrapper.claude.exited'
-        );
-      }
-    } catch {}
-    return false;
-  };
-
   // State for pretty printing assistant text only
   const verbose = Boolean(options.verbose);
   let printedStream = false;
@@ -682,6 +736,49 @@ async function tailSessionLog(
     } catch {
       // ignore parse errors in non-verbose mode
     }
+  };
+
+  // Print existing content first (filtered)
+  let position = 0;
+  try {
+    const content = await fsp.readFile(logPath, 'utf-8');
+    if (content.length > 0) {
+      const lines = content.split('\n');
+      for (const line of lines) {
+        if (line) handleLine(line);
+      }
+      position = Buffer.byteLength(content, 'utf-8');
+    }
+  } catch {
+    // if not exists yet, start at 0 and wait
+    position = 0;
+  }
+
+  const { watch } = await import('node:fs');
+  let closing = false;
+  const stop = () => {
+    if (!closing) {
+      closing = true;
+    }
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+
+  // To determine end-of-session, watch for specific events in appended lines
+  const isTerminalEvent = (line: string): boolean => {
+    try {
+      const obj = JSON.parse(line);
+      if (obj && typeof obj === 'object' && typeof obj.kind === 'string') {
+        const k = obj.kind as string;
+        return (
+          k === 'agent.runtime.done' ||
+          k === 'agent.runtime.process.exited' ||
+          k === 'wrapper.finalized' ||
+          k === 'wrapper.claude.exited'
+        );
+      }
+    } catch {}
+    return false;
   };
 
   const readChunk = async (): Promise<void> => {
