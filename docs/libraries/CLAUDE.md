@@ -2,18 +2,20 @@
 
 ## Purpose
 
-This directory contains reference documentation for external libraries and APIs used by Klaude:
+This directory contains reference documentation for external libraries, APIs, and protocols used by Klaude:
 - **typescript-sdk.md** — `@anthropic-ai/claude-agent-sdk` reference
+- **mcp-reference.md** — Model Context Protocol (MCP) servers: setup, configuration, and integration guide
 - **plugins.md** — Claude Code plugins system (creating, installing, distributing plugins)
 - **hooks-reference.md** — Claude Code hooks configuration and usage
 - **cli-reference.md** — Claude Code CLI command reference
+- **other-references.md** — Additional external library references
 
 ## Maintenance Guidelines
 
 **When to update:**
 - External API or SDK versions change significantly
 - New Claude Code features are released
-- Plugins system, hooks configuration, or CLI syntax changes
+- MCP servers, plugins system, hooks configuration, or CLI syntax changes
 - Reference documentation becomes outdated or incomplete
 
 **Update approach:**
