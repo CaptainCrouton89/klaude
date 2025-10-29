@@ -6,6 +6,8 @@ Core business logic for spawning Claude, managing wrapper instances, and coordin
 
 **Socket-based IPC**: Wrapper instance listens on `~/.klaude/run/<projectHash>/<instanceId>.sock`. Clients send newline-delimited JSON requests; wrapper responds with JSON and closes socket (one-shot per connection).
 
+**Agent Definition Loading** (`agent-definitions.ts`): Parses agent markdown files from project and user directories. Files use YAML-style key:value header (name, description, allowedAgents, model, color) followed by instructions. Caching prevents repeated file reads.
+
 **Session Checkout State Machine** (`wrapper-instance.ts:1279-1478`): Complex dance:
 1. Validate target session has Claude session ID (try active link → wait for hooks → wait for SDK)
 2. Set `state.pendingSwitch` to block concurrent checkouts
@@ -26,6 +28,7 @@ Core business logic for spawning Claude, managing wrapper instances, and coordin
 | File | Purpose |
 |------|---------|
 | `wrapper-instance.ts` | Socket server, Claude/agent spawn, event streaming, session checkout |
+| `agent-definitions.ts` | Parse agent markdown metadata, compose prompts, manage agent cache |
 | `project-context.ts` | Project root resolution, hash derivation, directory scaffolding |
 | `instance-client.ts` | CLI-side net client, IPC request marshaling |
 | `config.ts` | Load/validate config, expose wrapper settings |
@@ -47,3 +50,4 @@ Core business logic for spawning Claude, managing wrapper instances, and coordin
 - **TTY detection**: Dynamic TTY path detection for proper foreground TUI behavior
 - **Agent runtime entry**: Built to `src/runtime/agent-runtime.js`; wrapper spawns as subprocess via stdin/stdout event stream
 - **Detached agents**: Support both attached (TUI-aware) and detached (headless) modes via `StartAgentRequestPayload.options.detach`
+- **Agent scopes**: Project scope (`.claude/agents/`) takes precedence over user scope (`~/.claude/agents/`)
