@@ -5,22 +5,22 @@
  * via the local CLI SDK, and streams structured events back to the wrapper over stdout.
  */
 
-import { stdin, stdout, stderr, exit } from 'node:process';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { exit, stderr, stdin, stdout } from 'node:process';
 import readline from 'node:readline';
+import { pathToFileURL } from 'node:url';
 
 import type {
-  Options as QueryOptions,
+  HookInput,
+  HookJSONOutput,
   Query,
+  Options as QueryOptions,
   SDKAssistantMessage,
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
   SDKUserMessage,
-  HookInput,
-  HookJSONOutput,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerConfig } from '../types/index.js';
 
@@ -256,25 +256,16 @@ async function blockTaskToolHook(
   if (input.tool_name === 'Task') {
     return {
       hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: `ERROR: The Task tool is blocked in klaude sessions. Use the klaude tool instead to spawn and manage agents.
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: `ERROR: The Task tool is replaced with \`klaude start <agent_type> <prompt> [options]\`. You MUST re-delegate this task, but use the klaude instead.
 
 To spawn an agent, use:
   klaude start <agent_type> <prompt> [options]
 
 Available options:
-  --attach    Attach to agent in foreground (blocks until complete)
-  --detach    Run agent in background (default)
-
-Example:
-  klaude start context-engineer "Find all authentication patterns" --attach
-
-To list running agents:
-  klaude sessions
-
-To switch to an agent:
-  klaude checkout <session_id>`,
+  --attach    Attach to agent in foreground (blocks until complete). Do  this when the task is a dependency for a known next step.
+  --detach    Run agent in background (default).`,
       },
     };
   }

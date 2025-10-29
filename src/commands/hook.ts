@@ -1,13 +1,13 @@
-import { promises as fsp } from 'node:fs';
-import { Command } from 'commander';
+import type { ClaudeHookPayload, PreUserMessagePayload } from '@/hooks/session-hooks.js';
 import {
+  handlePreUserMessageHook,
   handleSessionEndHook,
   handleSessionStartHook,
-  handlePreUserMessageHook,
 } from '@/hooks/session-hooks.js';
-import type { ClaudeHookPayload, PreUserMessagePayload } from '@/hooks/session-hooks.js';
-import { KlaudeError, printError } from '@/utils/error-handler.js';
 import { readStdin } from '@/utils/cli-helpers.js';
+import { KlaudeError, printError } from '@/utils/error-handler.js';
+import { Command } from 'commander';
+import { promises as fsp } from 'node:fs';
 
 /**
  * Register the 'klaude hook' command with all its subcommands.
@@ -162,25 +162,16 @@ export function registerHookCommand(program: Command): void {
         if (toolName === 'Task') {
           const response = {
             hookSpecificOutput: {
-              hookEventName: 'PreToolUse',
-              permissionDecision: 'deny',
-              permissionDecisionReason: `ERROR: The Task tool is blocked in klaude sessions. Use the klaude tool instead to spawn and manage agents.
+              hookEventName: "PreToolUse",
+              permissionDecision: "deny",
+              permissionDecisionReason: `ERROR: The Task tool is replaced with \`klaude start <agent_type> <prompt> [options]\`. You MUST re-delegate this task, but use the klaude instead.
 
 To spawn an agent, use:
   klaude start <agent_type> <prompt> [options]
 
 Available options:
-  --attach    Attach to agent in foreground (blocks until complete)
-  --detach    Run agent in background (default)
-
-Example:
-  klaude start context-engineer "Find all authentication patterns" --attach
-
-To list running agents:
-  klaude sessions
-
-To switch to an agent:
-  klaude checkout <session_id>`,
+  --attach    Attach to agent in foreground (blocks until complete). Do  this when the task is a dependency for a known next step.
+  --detach    Run agent in background (default).`
             },
           };
           process.stdout.write(JSON.stringify(response) + '\n');
