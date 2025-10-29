@@ -53,13 +53,12 @@ Commands:
     Description: Starts the wrapper for that directory and creates a brand new TUI claude code agent as the root.
 
   klaude start <agent_type> <prompt> [agent_count] [options]
-    Description: Spawns an agent (type loaded from agents directory) to perform the task. Agent prompt is appended with instructions on updating the parent. Streams response back to the terminal continuously, but also saved in klaude session.
+    Description: Spawns an agent (type loaded from agents directory) to perform the task. Agent prompt is appended with instructions on updating the parent. Runs detached by default.
     Agent Type: Name of any agent definition in your agents directory (e.g., `orchestrator`, `programmer`, `context-engineer`, or custom agents).
     Options:
       -c, --checkout       Checks out the agent immediately after starting
       -s, --share          Shares current context (last X messages) with the new agent
-      -d, --detach         Start without streaming back output (detached mode - default)
-      --attach             Attach to agent stream in foreground (opposite of --detach)
+      -a, --attach         Attach to agent stream in foreground (blocks until completion)
       -v, --verbose        Show detailed debug information
       --instance <id>      Target specific wrapper instance
     Returns: The process and session ID of the started agent.
@@ -67,7 +66,7 @@ Commands:
   klaude checkout [id]
     Description: Interrupts the current agent (cli), exits it, then enters the specified agent's session without interrupting the target agent. If no ID is provided, enters parent agent.
     Options:
-      --wait <seconds>     Wait for hooks to deliver target session id (default: 5)
+      --timeout <seconds>  Wait for hooks to deliver target session id (default: 5)
       --instance <id>      Target specific wrapper instance
 
   enter-agent [id]
@@ -76,7 +75,7 @@ Commands:
   klaude message <id> <prompt> [options]
     Description: Sends an asynchronous message to the specified agent.
     Options:
-      -w, --wait <seconds> Blocks until the agent responds (default: 5 seconds)
+      --timeout <seconds>  Blocks until the agent responds (default: 5 seconds)
       --instance <id>      Target specific wrapper instance
 
   klaude interrupt <id>
@@ -90,12 +89,22 @@ Commands:
     Options:
       -v, --verbose        Displays more detailed information for each session
 
-  klaude read <id> [options]
-    Description: Reads the full response logs for the specified session.
+  klaude wait <sessionIds...> [options]
+    Description: Block until agent session(s) complete
     Options:
-      -t, --tail           Tails the logs (tail -f style)
+      --timeout <seconds>  Maximum wait time (default: no limit)
+      --any                Return when ANY complete (vs ALL)
+      --interval <ms>      Poll interval (default: 500ms)
+
+  klaude status <sessionIds...>
+    Description: Check status of agent session(s)
+
+  klaude logs <id> [options]
+    Description: Read session logs
+    Options:
+      -f, --follow         Stream log continuously (like tail -f)
       -s, --summary        Summarize the session
-      -v, --verbose        Show raw JSON events instead of filtered output
+      --raw                Show raw JSON events instead of filtered output
       --instance <id>      Target specific wrapper instance for live tailing
 
   klaude instances [options]

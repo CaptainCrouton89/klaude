@@ -35,14 +35,22 @@ npm run format        # prettier
 - `klaude start <agent_type> <prompt> [options]` – Spawn agent
   - `-c, --checkout` – Checkout immediately after starting
   - `-s, --share` – Share context (last X messages) with new agent
-  - `-d, --detach` – Start without streaming output (default)
-  - `--attach` – Attach to agent stream in foreground
+  - `-a, --attach` – Attach to agent stream (blocks until completion)
 - `klaude checkout [id]` – Switch to agent via Claude `--resume`
+  - `--timeout <seconds>` – Wait for hooks (default: 5)
 - `enter-agent [id]` – Alias for `klaude checkout`
-- `klaude message <id> <prompt> [-w, --wait]` – Send async message to running agent
+- `klaude wait <id...>` – Block until agent(s) complete
+  - `--timeout <seconds>` – Maximum wait time
+  - `--any` – Return when ANY complete (vs ALL)
+- `klaude status <id...>` – Check status of agent session(s)
+- `klaude message <id> <prompt>` – Send async message to running agent
+  - `--timeout <seconds>` – Wait for response (default: 5)
 - `klaude interrupt <id>` – SIGINT/SIGTERM to agent runtime
 - `klaude sessions [-v]` – List sessions (verbose shows details)
-- `klaude read <id> [-t | -s]` – Read session log (tail or summarize)
+- `klaude logs <id>` – Read session logs
+  - `-f, --follow` – Stream continuously (like tail -f)
+  - `-s, --summary` – Summarize session
+  - `--raw` – Show raw JSON events
 - `klaude instances [--status]` – List active wrapper instances
 - `klaude setup-hooks` – Install hooks to ~/.claude/settings.json
 
@@ -126,7 +134,7 @@ Wrapper exports: `KLAUDE_PROJECT_HASH`, `KLAUDE_INSTANCE_ID`, `KLAUDE_SESSION_ID
 ✓ Hooks (session-start/session-end)
 ✓ Agent runtime (SDK runner, event streaming)
 ✓ MCP server configuration (resolution logic)
-✓ CLI polish (sessions -v, read -t/-s, enter-agent alias, setup-hooks)
+✓ CLI polish (normalized commands: logs, wait, status, --timeout flags)
 
 ## Core Files
 
