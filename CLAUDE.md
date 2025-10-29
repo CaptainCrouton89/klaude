@@ -51,6 +51,10 @@ npm run format        # prettier
   - `-f, --follow` – Stream continuously (like tail -f)
   - `-s, --summary` – Summarize session
   - `--raw` – Show raw JSON events
+  - `-n, --lines <N>` – Limit output to N lines (shows last N)
+  - `--tail <N>` – Show last N lines (alias for -n)
+  - `--head <N>` – Show first N lines
+  - `--instance <id>` – Target specific wrapper instance
 - `klaude instances [--status]` – List active wrapper instances
 - `klaude setup-hooks` – Install hooks to ~/.claude/settings.json
 
@@ -134,7 +138,7 @@ Wrapper exports: `KLAUDE_PROJECT_HASH`, `KLAUDE_INSTANCE_ID`, `KLAUDE_SESSION_ID
 ✓ Hooks (session-start/session-end)
 ✓ Agent runtime (SDK runner, event streaming)
 ✓ MCP server configuration (resolution logic)
-✓ CLI polish (normalized commands: logs, wait, status, --timeout flags)
+✓ CLI polish (normalized commands: logs, wait, status, --timeout flags, line-limiting options)
 
 ## Core Files
 

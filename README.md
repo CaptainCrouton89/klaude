@@ -105,7 +105,16 @@ Commands:
       -f, --follow         Stream log continuously (like tail -f)
       -s, --summary        Summarize the session
       --raw                Show raw JSON events instead of filtered output
+      -n, --lines <N>      Limit output to N lines (shows last N lines)
+      --tail <N>           Show last N lines (alias for -n)
+      --head <N>           Show first N lines
       --instance <id>      Target specific wrapper instance for live tailing
+    Examples:
+      klaude logs <id>              # View full log
+      klaude logs <id> --tail 50    # Show last 50 lines
+      klaude logs <id> -n 20        # Show last 20 lines
+      klaude logs <id> --head 100   # Show first 100 lines
+      klaude logs <id> -f           # Stream continuously
 
   klaude instances [options]
     Description: List all active wrapper instances for the current project.
