@@ -121,17 +121,10 @@ function mergeConfig(defaults: KlaudeConfig, partial: Partial<KlaudeConfig>): Kl
     }
   }
 
-  // Merge MCP servers (partial overrides defaults for same names)
-  const mcpServers = {
-    ...(defaults.mcpServers ?? {}),
-    ...(partial.mcpServers ?? {}),
-  };
-
   return {
     sdk: sdkConfig as KlaudeConfig['sdk'],
     server: serverConfig as KlaudeConfig['server'],
     wrapper: wrapperConfig as KlaudeConfig['wrapper'],
-    mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
   };
 }
 

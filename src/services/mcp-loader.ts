@@ -2,13 +2,13 @@
  * MCP server loading from multiple sources
  * Loads MCPs from:
  * 1. Project .mcp.json (standard Claude Code format)
- * 2. ~/.klaude/config.yaml mcpServers section
+ * 2. ~/.klaude/.mcp.json (klaude global MCP registry)
  */
 
 import { existsSync, promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { McpServerConfig } from '@/types/index.js';
-import { loadConfig } from './config-loader.js';
+import { getKlaudeHome } from '@/utils/path-helper.js';
 
 /**
  * Parsed .mcp.json file structure (matches Claude Code format)
@@ -49,22 +49,40 @@ export async function loadProjectMcps(projectRoot: string): Promise<Record<strin
 }
 
 /**
- * Load MCPs from ~/.klaude/config.yaml mcpServers section
+ * Load MCPs from ~/.klaude/.mcp.json (klaude global MCP registry)
  * Returns empty object if not configured
  */
 export async function loadKlaudeMcps(): Promise<Record<string, McpServerConfig>> {
+  const klaudeHome = getKlaudeHome();
+  const mcpJsonPath = path.join(klaudeHome, '.mcp.json');
+
+  if (!existsSync(mcpJsonPath)) {
+    return {};
+  }
+
   try {
-    const config = await loadConfig();
-    return config.mcpServers ?? {};
+    const content = await fsp.readFile(mcpJsonPath, 'utf-8');
+    const parsed = JSON.parse(content) as McpJsonFile;
+
+    if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') {
+      console.warn(`Invalid .mcp.json at ${mcpJsonPath}: missing or invalid mcpServers`);
+      return {};
+    }
+
+    return parsed.mcpServers;
   } catch (error) {
-    console.warn('Failed to load MCP servers from klaude config:', error);
+    if (error instanceof SyntaxError) {
+      console.warn(`Invalid JSON in .mcp.json at ${mcpJsonPath}`);
+    } else if (error instanceof Error) {
+      console.warn(`Failed to load .mcp.json from ${mcpJsonPath}: ${error.message}`);
+    }
     return {};
   }
 }
 
 /**
  * Load all available MCP servers from all sources
- * Precedence: Project .mcp.json > Klaude config
+ * Precedence: Project .mcp.json > ~/.klaude/.mcp.json
  */
 export async function loadAvailableMcps(projectRoot: string): Promise<Record<string, McpServerConfig>> {
   const [klaudeMcps, projectMcps] = await Promise.all([
@@ -72,7 +90,7 @@ export async function loadAvailableMcps(projectRoot: string): Promise<Record<str
     loadProjectMcps(projectRoot),
   ]);
 
-  // Project MCPs override Klaude config MCPs for same names
+  // Project MCPs override klaude global MCPs for same names
   return {
     ...klaudeMcps,
     ...projectMcps,

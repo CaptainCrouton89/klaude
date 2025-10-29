@@ -51,11 +51,6 @@ export interface KlaudeConfig {
       graceSeconds?: number;
     };
   };
-  /**
-   * MCP server registry (same format as .mcp.json mcpServers section)
-   * Provides named MCP servers that agents can reference
-   */
-  mcpServers?: Record<string, McpServerConfig>;
 }
 
 /**
