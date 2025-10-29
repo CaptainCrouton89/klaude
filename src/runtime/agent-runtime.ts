@@ -22,6 +22,7 @@ import type {
   HookInput,
   HookJSONOutput,
 } from '@anthropic-ai/claude-agent-sdk';
+import type { McpServerConfig } from '../types/index.js';
 
 type PermissionMode = QueryOptions['permissionMode'];
 
@@ -48,6 +49,14 @@ interface RuntimeInitPayload {
     fallbackModel?: string | null;
     permissionMode?: PermissionMode | null;
   };
+  /**
+   * All available MCP servers from registries (.mcp.json, config.yaml)
+   */
+  availableMcps?: Record<string, McpServerConfig>;
+  /**
+   * Parent agent's resolved MCP servers (for inheritance)
+   */
+  parentMcps?: Record<string, McpServerConfig>;
 }
 
 type OutboundEvent =
@@ -273,10 +282,10 @@ To switch to an agent:
   return {};
 }
 
-function buildQueryOptions(
+async function buildQueryOptions(
   init: RuntimeInitPayload,
   abortController: AbortController,
-): QueryOptions {
+): Promise<QueryOptions> {
   // Klaude agents run in bypassPermissions mode by default
   const permissionMode: PermissionMode = init.sdk?.permissionMode ? init.sdk.permissionMode : 'bypassPermissions';
 
@@ -312,6 +321,36 @@ function buildQueryOptions(
     options.cwd = init.metadata.projectRoot;
   }
 
+  // Resolve MCPs for this agent
+  if (init.availableMcps) {
+    try {
+      const { resolveMcpServers } = await import('../services/mcp-resolver.js');
+      const { loadAgentDefinition } = await import('../services/agent-definitions.js');
+
+      // Load agent definition to get MCP configuration
+      const agentDefinition = await loadAgentDefinition(init.agentType, {
+        projectRoot: init.metadata?.projectRoot,
+      });
+
+      if (agentDefinition) {
+        const mcpServers = resolveMcpServers({
+          availableMcps: init.availableMcps,
+          agentDefinition,
+          parentMcps: init.parentMcps,
+        });
+
+        // Only set mcpServers if there are any to set
+        if (Object.keys(mcpServers).length > 0) {
+          options.mcpServers = mcpServers;
+        }
+      }
+    } catch (error) {
+      // MCP resolution failure - log but don't fail the agent
+      const message = error instanceof Error ? error.message : String(error);
+      emit({ type: 'log', level: 'warn', message: `MCP resolution failed: ${message}` });
+    }
+  }
+
   return options;
 }
 
@@ -329,7 +368,7 @@ async function run(): Promise<void> {
   }) => Query;
 
   const abortController = new AbortController();
-  const options = buildQueryOptions(init, abortController);
+  const options = await buildQueryOptions(init, abortController);
 
   let announcedSessionId = false;
   let finished = false;
