@@ -10,6 +10,7 @@ import {
   handlePreUserMessageHook,
 } from '@/hooks/session-hooks.js';
 import type { ClaudeHookPayload, PreUserMessagePayload } from '@/hooks/session-hooks.js';
+import type { ClaudeCliFlags } from '@/types/index.js';
 import { setupHooks } from '@/setup-hooks.js';
 import { listInstances } from '@/services/instance-registry.js';
 import { prepareProjectContext } from '@/services/project-context.js';
@@ -31,6 +32,18 @@ import {
 import { getSessionLogPath } from '@/utils/path-helper.js';
 import { loadConfig } from '@/services/config-loader.js';
 import { KlaudeError, printError } from '@/utils/error-handler.js';
+
+// Extract Claude CLI flags before Commander processes arguments
+// Commander treats everything after -- as positional args, which causes issues
+// So we extract them first and remove them from argv
+const separatorIndex = process.argv.indexOf('--');
+let claudeCliFlags: string[] = [];
+let cleanedArgv = process.argv;
+
+if (separatorIndex >= 0) {
+  claudeCliFlags = process.argv.slice(separatorIndex + 1);
+  cleanedArgv = [...process.argv.slice(0, separatorIndex)];
+}
 
 const program = new Command();
 
@@ -89,6 +102,20 @@ program.exitOverride((err) => {
 
 function resolveProjectDirectory(cwdOption?: string): string {
   return cwdOption ? path.resolve(cwdOption) : process.cwd();
+}
+
+/**
+ * Parse Claude CLI flags from command line arguments.
+ * Classifies flags into one-time (e.g., -r) and persistent (e.g., --dangerously-skip-permissions).
+ */
+function parseClaudeFlags(flags: string[]): { oneTime: string[]; persistent: string[] } {
+  const oneTimePatterns = ['-r'];
+  const persistentPatterns = ['--dangerously-skip-permissions'];
+
+  return {
+    oneTime: flags.filter(f => oneTimePatterns.includes(f)),
+    persistent: flags.filter(f => persistentPatterns.includes(f)),
+  };
 }
 
 async function readStdin(): Promise<string> {
@@ -756,14 +783,21 @@ program
 program.action(async (options: OptionValues) => {
   try {
     const projectCwd = options.cwd ? path.resolve(options.cwd) : process.cwd();
-    await startWrapperInstance({ projectCwd });
+
+    // Use the Claude CLI flags extracted before Commander processing
+    const cliFlags = claudeCliFlags.length > 0
+      ? parseClaudeFlags(claudeCliFlags)
+      : undefined;
+
+    await startWrapperInstance({ projectCwd, claudeCliFlags: cliFlags });
   } catch (error) {
     printError(error);
     process.exitCode = process.exitCode ?? 1;
   }
 });
 
-program.parseAsync(process.argv).catch((error) => {
+// Use cleaned argv (without the -- and Claude flags)
+program.parseAsync(cleanedArgv).catch((error) => {
   printError(error);
   process.exitCode = process.exitCode ?? 1;
 });

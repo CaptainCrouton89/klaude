@@ -20,6 +20,16 @@ export type McpServerConfig =
     };
 
 /**
+ * Claude CLI flags configuration
+ */
+export interface ClaudeCliFlags {
+  /** One-time flags (only used on initial launch) */
+  oneTime: string[];
+  /** Persistent flags (used on all launches including checkouts) */
+  persistent: string[];
+}
+
+/**
  * Configuration structure from ~/.klaude/config.yaml
  */
 export interface KlaudeConfig {
@@ -36,6 +46,7 @@ export interface KlaudeConfig {
     claudeBinary?: string;
     socketDir?: string;
     projectsDir?: string;
+    cliFlags?: ClaudeCliFlags;
     switch?: {
       graceSeconds?: number;
     };

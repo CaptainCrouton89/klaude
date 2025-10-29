@@ -10,7 +10,7 @@ import {
   loadAgentDefinition,
 } from '@/services/agent-definitions.js';
 import type { AgentDefinition } from '@/services/agent-definitions.js';
-import type { McpServerConfig } from '@/types/index.js';
+import type { ClaudeCliFlags, McpServerConfig } from '@/types/index.js';
 import {
   closeDatabase,
   createClaudeSessionLink,
@@ -20,6 +20,7 @@ import {
   createRuntimeProcess,
   createSession,
   getClaudeSessionLink,
+  getInstanceById,
   listClaudeSessionLinks,
   getProjectByHash,
   getSessionById,
@@ -54,6 +55,7 @@ import { generateULID } from '@/utils/ulid.js';
 
 interface WrapperStartOptions {
   projectCwd?: string;
+  claudeCliFlags?: ClaudeCliFlags;
 }
 
 function debugLog(...args: unknown[]): void {
@@ -314,7 +316,11 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     socketPath,
   });
 
-  createInstance(instanceId, projectRecord.id, process.pid, ttyPath);
+  const instanceMetadata = options.claudeCliFlags
+    ? JSON.stringify({ claudeCliFlags: options.claudeCliFlags })
+    : null;
+
+  createInstance(instanceId, projectRecord.id, process.pid, ttyPath, instanceMetadata);
 
   const rootSession = createSession(projectRecord.id, 'tui', {
     instanceId,
@@ -1085,13 +1091,35 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
   async function launchClaudeForSession(
     sessionId: string,
-    options: { resumeClaudeSessionId?: string; sourceSessionId?: string } = {},
+    options: { resumeClaudeSessionId?: string; sourceSessionId?: string; isInitialLaunch?: boolean } = {},
   ): Promise<void> {
     debugLog(`[claude-launch] sessionId=${sessionId}, resume=${options.resumeClaudeSessionId ?? 'none'}`);
 
     const args: string[] = [];
     if (options.resumeClaudeSessionId) {
       args.push('--resume', options.resumeClaudeSessionId);
+    }
+
+    // Retrieve and apply CLI flags from instance metadata
+    const instance = getInstanceById(instanceId);
+    let storedFlags: ClaudeCliFlags | null = null;
+    if (instance?.metadata_json) {
+      try {
+        const metadata = JSON.parse(instance.metadata_json) as { claudeCliFlags?: ClaudeCliFlags };
+        storedFlags = metadata.claudeCliFlags ?? null;
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    // Add persistent flags to all launches
+    if (storedFlags?.persistent && storedFlags.persistent.length > 0) {
+      args.push(...storedFlags.persistent);
+    }
+
+    // Add one-time flags only to initial launch
+    if (options.isInitialLaunch && storedFlags?.oneTime && storedFlags.oneTime.length > 0) {
+      args.push(...storedFlags.oneTime);
     }
 
     const env = {
@@ -1237,6 +1265,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         await launchClaudeForSession(switchInfo.targetSessionId, {
           resumeClaudeSessionId: switchInfo.targetClaudeSessionId,
           sourceSessionId: sessionId,
+          isInitialLaunch: false,
         });
         await recordSessionEvent(switchInfo.targetSessionId, 'wrapper.checkout.activated', {
           fromSessionId: sessionId,
@@ -1653,6 +1682,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       await launchClaudeForSession(targetSessionId, {
         resumeClaudeSessionId: claudeSessionId,
         sourceSessionId: currentSessionId,
+        isInitialLaunch: false,
       });
       const launchElapsed = Date.now() - launchStart;
       debugLog(`[checkout-launch-done] elapsed=${launchElapsed}ms`);
@@ -1752,7 +1782,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     await recordSessionEvent(rootSession.id, 'wrapper.start', { instanceId });
 
-    await launchClaudeForSession(rootSession.id);
+    await launchClaudeForSession(rootSession.id, { isInitialLaunch: true });
 
     await shutdownPromise;
   } catch (error) {
