@@ -8,7 +8,7 @@ Core business logic for spawning Claude, managing wrapper instances, coordinatin
 
 **Agent Definition Loading** (`agent-definitions.ts`): Parses agent markdown files from project and user directories. Files use YAML-style key:value header (name, description, allowedAgents, model, color, mcpServers) followed by instructions. Caching prevents repeated file reads.
 
-**MCP Resolution** (`mcp-loader.ts`, `mcp-resolver.ts`): Loads MCPs from `.mcp.json` (project) and `config.yaml` (user). Agents inherit project MCPs by default; can override with `mcpServers` frontmatter or inherit parent agent's MCPs via `inheritParentMcps: true`.
+**MCP Resolution** (`mcp-loader.ts`, `mcp-resolver.ts`): Loads MCPs from project `.mcp.json` and `~/.klaude/.mcp.json` (global registry). Agents inherit project MCPs by default; can override with `mcpServers` frontmatter or inherit parent agent's MCPs via `inheritParentMcps: true`.
 
 **Session Checkout** (`wrapper-instance.ts:1279-1478`): Validates target session has Claude session ID, blocks concurrent checkouts, SIGTERM→SIGKILL current Claude, then launch `--resume` for target.
 
@@ -24,11 +24,12 @@ Core business logic for spawning Claude, managing wrapper instances, coordinatin
 |------|---------|
 | `wrapper-instance.ts` | Socket server, Claude/agent spawn, event streaming, session checkout |
 | `agent-definitions.ts` | Parse agent markdown metadata, compose prompts, manage agent cache |
-| `mcp-loader.ts` | Load MCPs from `.mcp.json` and `config.yaml` |
+| `config-loader.ts` | Load/merge configuration from `config.yaml` with defaults |
+| `mcp-loader.ts` | Load MCPs from project `.mcp.json` and `~/.klaude/.mcp.json` |
 | `mcp-resolver.ts` | Resolve agent's MCP server access based on inheritance rules |
 | `project-context.ts` | Project root resolution, hash derivation, directory scaffolding |
 | `instance-client.ts` | CLI-side net client, IPC request marshaling |
-| `config.ts` | Load/validate config, expose wrapper settings |
+| `config.ts` | Config schema and types |
 | `session-hooks.ts` | session-start/session-end handlers |
 | `instance-registry.ts` | Registry of active wrapper instances |
 | `process.ts` | Process lifecycle (spawn, kill, attach/detach) |
