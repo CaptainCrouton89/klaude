@@ -58,6 +58,12 @@ function requirePayloadSessionId(payload: ClaudeHookPayload): string {
 export async function handleSessionStartHook(payload: ClaudeHookPayload): Promise<void> {
   const startTime = Date.now();
 
+  // Check if we're in a klaude session; if not, gracefully exit
+  if (!process.env.KLAUDE_PROJECT_HASH) {
+    await debugLog('Not in a klaude session (KLAUDE_PROJECT_HASH not set); exiting gracefully');
+    return;
+  }
+
   await debugLog('════════════════════════════════════════════════════════════');
   await debugLog('SESSION_START_HOOK INVOKED');
   await debugLog(`Timestamp: ${new Date().toISOString()}`);
@@ -195,6 +201,12 @@ export async function handleSessionStartHook(payload: ClaudeHookPayload): Promis
 
 export async function handleSessionEndHook(payload: ClaudeHookPayload): Promise<void> {
   const startTime = Date.now();
+
+  // Check if we're in a klaude session; if not, gracefully exit
+  if (!process.env.KLAUDE_PROJECT_HASH) {
+    await debugLog('Not in a klaude session (KLAUDE_PROJECT_HASH not set); exiting gracefully');
+    return;
+  }
 
   await debugLog('════════════════════════════════════════════════════════════');
   await debugLog('SESSION_END_HOOK INVOKED');
