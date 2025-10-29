@@ -12,23 +12,23 @@ import { KlaudeError, printError } from '@/utils/error-handler.js';
 import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
 
 /**
- * Register the 'klaude read' command.
+ * Register the 'klaude logs' command.
  * Reads a Klaude session log with various output modes.
  */
-export function registerReadCommand(program: Command): void {
+export function registerLogsCommand(program: Command): void {
   program
-    .command('read')
+    .command('logs')
     .description('Read a Klaude session log')
     .argument('<sessionId>', 'Session id to read')
-    .option('-t, --tail', 'Tail the log continuously')
+    .option('-f, --follow', 'Stream log continuously (like tail -f)')
     .option('-s, --summary', 'Print a brief summary instead of full log')
-    .option('-v, --verbose', 'Verbose: print raw JSON events (default prints assistant text only)')
+    .option('--raw', 'Show raw JSON events (default shows assistant text only)')
     .option('--instance <id>', 'Target instance id for live tailing')
     .option('-C, --cwd <path>', 'Project directory override')
     .action(async (sessionId: string, options: OptionValues) => {
       try {
-        if (options.tail && options.summary) {
-          throw new KlaudeError('Choose either --tail or --summary', 'E_INVALID_FLAGS');
+        if (options.follow && options.summary) {
+          throw new KlaudeError('Choose either --follow or --summary', 'E_INVALID_FLAGS');
         }
 
         const projectCwd = resolveProjectDirectory(options.cwd);
@@ -42,12 +42,12 @@ export function registerReadCommand(program: Command): void {
         );
 
         try {
-          if (options.tail) {
-            await tailSessionLog(logPath, { untilExit: false, verbose: Boolean(options.verbose) });
+          if (options.follow) {
+            await tailSessionLog(logPath, { untilExit: false, raw: Boolean(options.raw) });
           } else if (options.summary) {
             await printSessionSummary(logPath);
           } else {
-            if (options.verbose) {
+            if (options.raw) {
               const content = await fsp.readFile(logPath, 'utf-8');
               if (content.length === 0) {
                 console.log('(log is empty)');
