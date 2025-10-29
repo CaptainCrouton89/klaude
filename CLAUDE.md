@@ -47,7 +47,7 @@ npm run format        # prettier
 ## CLI Contract (from prd.md)
 
 - `klaude` – Start wrapper + Claude TUI
-- `klaude start <agent_type> <prompt> [options]` – Spawn agent (attach/detach)
+- `klaude start <agent_type> <prompt> [options]` – Spawn agent (type loaded from agents directory) with attach/detach support
 - `klaude checkout [id] [--instance <id>]` – Switch to agent via Claude --resume
 - `klaude message <id> <prompt>` – Send message to running agent
 - `klaude interrupt <id>` – SIGINT/SIGTERM to agent runtime
@@ -55,6 +55,8 @@ npm run format        # prettier
 - `klaude read <id> [-t | -s]` – Read/tail session log
 - `klaude instances` – List active wrapper instances
 - `klaude hook session-start|session-end` – Hook handler (internal)
+
+**Agent Discovery**: Agent types are dynamically loaded from your agents directory (`~/.claude/agents/` or `./.claude/agents/`). Any agent definition available there can be spawned with `klaude start <agent_name> <prompt>`.
 
 ## Hooks Setup
 

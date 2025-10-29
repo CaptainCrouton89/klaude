@@ -35,7 +35,55 @@ const program = new Command();
 program
   .name('klaude')
   .description('Multi-agent wrapper for Claude Code sessions')
-  .option('-C, --cwd <path>', 'Project directory override');
+  .option('-C, --cwd <path>', 'Project directory override')
+  .showHelpAfterError('(add --help for additional information)')
+  .addHelpCommand(true);
+
+// Handle unknown commands and errors
+program.on('command:*', function (this: Command) {
+  const unknownCommand = this.args[0];
+  if (unknownCommand && typeof unknownCommand === 'string') {
+    console.error(`\n❌ Unknown command '${unknownCommand}'`);
+    console.error(`💡 Run 'klaude --help' to see available commands\n`);
+    process.exitCode = 1;
+  }
+});
+
+// Custom error handler for argument parsing errors
+program.exitOverride((err) => {
+  if (!err.message) {
+    throw err;
+  }
+
+  // Suppress the "(outputHelp)" message that Commander uses internally
+  if (err.message === '(outputHelp)' || err.message === '(default)') {
+    process.exit(err.exitCode ?? 0);
+  }
+
+  // Handle "too many arguments" or "not recognized" errors
+  if (err.message.includes('too many arguments') || err.message.includes('not recognized')) {
+    const match = err.message.match(/(?:too many arguments|not recognized)[\s:]*(\S+)?/);
+    let arg: string;
+    if (match && match[1]) {
+      arg = match[1];
+    } else {
+      arg = 'unknown argument';
+    }
+    console.error(`\n❌ Invalid command or too many arguments: '${arg}'`);
+    console.error(`💡 Run 'klaude --help' to see available commands\n`);
+    process.exit(1);
+  }
+
+  // Handle "missing required argument" errors
+  if (err.message.includes('missing required argument')) {
+    console.error(`\n${err.message.split('\n')[0]}`);
+    console.error(`💡 Run the command with '--help' to see required arguments\n`);
+    process.exit(1);
+  }
+
+  // Let other errors through
+  throw err;
+});
 
 function resolveProjectDirectory(cwdOption?: string): string {
   return cwdOption ? path.resolve(cwdOption) : process.cwd();
@@ -142,7 +190,7 @@ program
   .option('-v, --verbose', 'Verbose: print debug details (instance, log path)')
   .option('--instance <id>', 'Target instance id')
   .option('-C, --cwd <path>', 'Project directory override')
-  .action(async (agentType, prompt, agentCountArg, options) => {
+  .action(async (agentType: string, prompt: string, agentCountArg: string | undefined, options: OptionValues) => {
     try {
       const projectCwd = resolveProjectDirectory(options.cwd);
       const context = await prepareProjectContext(projectCwd);
@@ -226,7 +274,7 @@ program
   .description('List wrapper instances registered for this project')
   .option('-C, --cwd <path>', 'Project directory override')
   .option('--status', 'Query live status from active instances')
-  .action(async (options) => {
+  .action(async (options: OptionValues) => {
     try {
       const projectCwd = options.cwd ? path.resolve(options.cwd) : process.cwd();
       const context = await prepareProjectContext(projectCwd);
@@ -286,7 +334,7 @@ program
   .option('--wait <seconds>', 'Wait for hooks to deliver target session id', '5')
   .option('--instance <id>', 'Target instance id')
   .option('-C, --cwd <path>', 'Project directory override')
-  .action(async (sessionId: string | undefined, options) => {
+  .action(async (sessionId: string | undefined, options: OptionValues) => {
     try {
       const projectCwd = resolveProjectDirectory(options.cwd);
       const context = await prepareProjectContext(projectCwd);
@@ -332,7 +380,7 @@ program
   .option('-w, --wait <seconds>', 'Wait for response (default 5)', '5')
   .option('--instance <id>', 'Target instance id')
   .option('-C, --cwd <path>', 'Project directory override')
-  .action(async (sessionId: string, prompt: string, options) => {
+  .action(async (sessionId: string, prompt: string, options: OptionValues) => {
     try {
       const projectCwd = resolveProjectDirectory(options.cwd);
       const context = await prepareProjectContext(projectCwd);
@@ -389,7 +437,7 @@ program
   .option('--signal <signal>', 'POSIX signal to send (default SIGINT)')
   .option('--instance <id>', 'Target instance id')
   .option('-C, --cwd <path>', 'Project directory override')
-  .action(async (sessionId: string, options) => {
+  .action(async (sessionId: string, options: OptionValues) => {
     try {
       const projectCwd = resolveProjectDirectory(options.cwd);
       const context = await prepareProjectContext(projectCwd);
@@ -420,7 +468,7 @@ program
   .description('List sessions recorded for this project')
   .option('-v, --verbose', 'Show additional metadata for each session')
   .option('-C, --cwd <path>', 'Project directory override')
-  .action(async (options) => {
+  .action(async (options: OptionValues) => {
     try {
       const projectCwd = resolveProjectDirectory(options.cwd);
       const context = await prepareProjectContext(projectCwd);
@@ -478,7 +526,7 @@ program
   .option('-v, --verbose', 'Verbose: print raw JSON events (default prints assistant text only)')
   .option('--instance <id>', 'Target instance id for live tailing')
   .option('-C, --cwd <path>', 'Project directory override')
-  .action(async (sessionId: string, options) => {
+  .action(async (sessionId: string, options: OptionValues) => {
     try {
       if (options.tail && options.summary) {
         throw new KlaudeError('Choose either --tail or --summary', 'E_INVALID_FLAGS');

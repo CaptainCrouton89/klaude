@@ -17,6 +17,8 @@ klaude sessions
 enter-agent <agent-id>  # switch to another agent
 ```
 
+Agent types are dynamically loaded from your agents directory (e.g., `~/.claude/agents/` or `./.claude/agents/`). Any agent definition available there can be used with `klaude start`.
+
 The wrapper handles session switching seamlessly. When agents run, Klaude records both its internal session ID _and_ Claude Code's session ID; the latter is what the wrapper uses for `--resume`.
 
 ### Claude Binary Path
@@ -50,11 +52,12 @@ Commands:
   klaude
     Description: Starts the wrapper for that directory and creates a brand new TUI claude code agent as the root.
   klaude start <agent_type> <prompt> [agent_count] [options]
-    Description: Delegates an agent of that type to perform the task. Agent prompt is appended with instructions on updating the parent. Streams response back to the terminal continuously, but also saved in klaude session.
+    Description: Spawns an agent (type loaded from agents directory) to perform the task. Agent prompt is appended with instructions on updating the parent. Streams response back to the terminal continuously, but also saved in klaude session.
+    Agent Type: Name of any agent definition in your agents directory (e.g., `orchestrator`, `programmer`, `context-engineer`, or custom agents).
     Options:
       -c, --checkout  Checks out the agent immediately after starting, without interrupting it.
       -s, --share     Shares current context (last X messages) with the new agent.
-      -d, --detach    Start without streaming back output (for daemonized agents). 
+      -d, --detach    Start without streaming back output (for daemonized agents).
     Returns: The process and session ID of the started agent.
 
   klaude checkout [id]

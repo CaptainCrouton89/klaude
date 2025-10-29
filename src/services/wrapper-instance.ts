@@ -5,7 +5,11 @@ import path from 'node:path';
 import type { WriteStream } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 
-import { VALID_AGENT_TYPES } from '@/config/constants.js';
+import {
+  composeAgentPrompt,
+  loadAgentDefinition,
+} from '@/services/agent-definitions.js';
+import type { AgentDefinition } from '@/services/agent-definitions.js';
 import {
   closeDatabase,
   createClaudeSessionLink,
@@ -369,15 +373,6 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
   const normalizeAgentType = (agentType: string): string => agentType.trim().toLowerCase();
 
-  const resolveAgentType = (agentType: string): string => {
-    const normalized = normalizeAgentType(agentType);
-    const match = VALID_AGENT_TYPES.find((candidate) => candidate.toLowerCase() === normalized);
-    if (!match) {
-      throw new KlaudeError(`Unknown agent type: ${agentType}`, 'E_AGENT_TYPE_INVALID');
-    }
-    return match;
-  };
-
   const handleStartAgent = async (
     payload: StartAgentRequestPayload,
   ): Promise<StartAgentResponsePayload> => {
@@ -388,7 +383,20 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       throw new KlaudeError('Prompt is required for agent start', 'E_PROMPT_REQUIRED');
     }
 
-    const agentType = resolveAgentType(payload.agentType);
+    const requestedAgentType = payload.agentType;
+    const normalizedAgentType = normalizeAgentType(requestedAgentType);
+    const agentDefinition = await loadAgentDefinition(requestedAgentType, {
+      projectRoot: context.projectRoot,
+    });
+
+    if (!agentDefinition) {
+      throw new KlaudeError(
+        `Unknown agent type: ${requestedAgentType}`,
+        'E_AGENT_TYPE_INVALID',
+      );
+    }
+
+    const agentType = agentDefinition.type;
     const parentSessionId = payload.parentSessionId ?? rootSession.id;
 
     const parentSession = getSessionById(parentSessionId);
@@ -405,6 +413,61 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       );
     }
 
+    if (parentSession.id !== rootSession.id) {
+      let parentMetadata: Record<string, unknown> | null = null;
+      try {
+        if (parentSession.metadata_json) {
+          parentMetadata = JSON.parse(parentSession.metadata_json) as Record<string, unknown>;
+        }
+      } catch {
+        parentMetadata = null;
+      }
+
+      let parentLabel = 'parent';
+      let enforcedAllowedAgents: string[] | null = null;
+      if (parentMetadata) {
+        const metaWithAgent = parentMetadata as { agentType?: unknown };
+        const parentAgentType = metaWithAgent.agentType;
+        if (typeof parentAgentType === 'string' && parentAgentType.trim().length > 0) {
+          parentLabel = parentAgentType;
+        }
+
+        const definitionCandidate = (parentMetadata as { definition?: unknown }).definition;
+        if (definitionCandidate && typeof definitionCandidate === 'object' && definitionCandidate !== null) {
+          const definitionRecord = definitionCandidate as Record<string, unknown>;
+          const friendlyName = definitionRecord.name;
+          if (typeof friendlyName === 'string' && friendlyName.trim().length > 0) {
+            parentLabel = friendlyName;
+          }
+          if (Object.prototype.hasOwnProperty.call(definitionRecord, 'allowedAgents')) {
+            const value = definitionRecord.allowedAgents;
+            if (Array.isArray(value)) {
+              enforcedAllowedAgents = value
+                .map((entry) => (typeof entry === 'string' ? normalizeAgentType(entry) : ''))
+                .filter((entry) => entry.length > 0);
+            } else {
+              enforcedAllowedAgents = [];
+            }
+          }
+        }
+      }
+
+      if (enforcedAllowedAgents !== null) {
+        if (enforcedAllowedAgents.length === 0) {
+          throw new KlaudeError(
+            `Agent ${parentLabel} is not permitted to spawn additional agents`,
+            'E_AGENT_TYPE_NOT_ALLOWED',
+          );
+        }
+        if (!enforcedAllowedAgents.includes(normalizedAgentType)) {
+          throw new KlaudeError(
+            `Agent ${parentLabel} cannot start agent type ${agentType}`,
+            'E_AGENT_TYPE_NOT_ALLOWED',
+          );
+        }
+      }
+    }
+
     const metadata = {
       agentType,
       prompt: payload.prompt,
@@ -412,12 +475,23 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       instanceId,
       agentCount: payload.agentCount ?? null,
       options: payload.options ?? {},
+      definition: agentDefinition
+        ? {
+            name: agentDefinition.name,
+            description: agentDefinition.description,
+            allowedAgents: agentDefinition.allowedAgents,
+            model: agentDefinition.model,
+            color: agentDefinition.color,
+            sourcePath: agentDefinition.sourcePath,
+            scope: agentDefinition.scope,
+          }
+        : null,
     };
 
     const session = createSession(projectRecord.id, 'sdk', {
       parentId: parentSession.id,
       instanceId,
-      title: `${agentType} agent`,
+      title: agentDefinition?.name ?? `${agentType} agent`,
       prompt: payload.prompt,
       metadataJson: JSON.stringify(metadata),
     });
@@ -434,6 +508,11 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       parentSessionId: parentSession.id,
       options: payload.options ?? {},
       agentCount: payload.agentCount ?? null,
+      definitionName: agentDefinition?.name ?? null,
+      definitionModel: agentDefinition?.model ?? null,
+      definitionSourcePath: agentDefinition?.sourcePath ?? null,
+      allowedAgents: agentDefinition?.allowedAgents ?? [],
+      definitionScope: agentDefinition?.scope ?? null,
     };
 
     try {
@@ -472,7 +551,17 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       }
     }
 
-    await startAgentRuntimeProcess(session, agentType, payload, shareResumeId);
+    const composedPrompt = agentDefinition
+      ? composeAgentPrompt(agentDefinition, payload.prompt)
+      : payload.prompt;
+
+    await startAgentRuntimeProcess(
+      session,
+      agentType,
+      { ...payload, prompt: composedPrompt },
+      shareResumeId,
+      agentDefinition ?? null,
+    );
 
     return {
       sessionId: session.id,
@@ -628,6 +717,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     agentType: string,
     payload: StartAgentRequestPayload,
     resumeClaudeSessionId?: string | null,
+    agentDefinition: AgentDefinition | null = null,
   ): Promise<void> {
     debugLog(`[runtime-start] sessionId=${session.id}, agentType=${agentType}`);
 
@@ -686,6 +776,8 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         pid: child.pid,
         detached: runtimeState.detached,
         agentType,
+        definitionName: agentDefinition?.name ?? null,
+        definitionScope: agentDefinition?.scope ?? null,
       });
     });
 
@@ -750,6 +842,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       });
     });
 
+    const configuredModel = agentDefinition?.model ?? config.sdk?.model ?? null;
     const runtimeInitPayload = {
       sessionId: session.id,
       agentType,
@@ -762,9 +855,12 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         parentSessionId: session.parent_id ?? null,
         agentCount: payload.agentCount ?? null,
         projectRoot: context.projectRoot,
+        agentDefinitionName: agentDefinition?.name ?? null,
+        agentDefinitionSource: agentDefinition?.sourcePath ?? null,
+        agentDefinitionScope: agentDefinition?.scope ?? null,
       },
       sdk: {
-        model: config.sdk?.model ?? null,
+        model: configuredModel,
         permissionMode: config.sdk?.permissionMode ?? null,
         fallbackModel: config.sdk?.fallbackModel ?? null,
       },
@@ -1152,11 +1248,58 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
       // Derive the agent type label (stored in session metadata when created)
       let derivedAgentType = 'sdk';
+      let storedAgentDefinition: AgentDefinition | null = null;
       try {
         if (session.metadata_json) {
-          const meta = JSON.parse(session.metadata_json) as { agentType?: string };
+          const meta = JSON.parse(session.metadata_json) as {
+            agentType?: string;
+            definition?: unknown;
+          };
           if (meta && typeof meta.agentType === 'string' && meta.agentType.trim().length > 0) {
             derivedAgentType = meta.agentType;
+          }
+
+          const storedDefinitionRaw = meta?.definition;
+          if (storedDefinitionRaw && typeof storedDefinitionRaw === 'object') {
+            const definitionRecord = storedDefinitionRaw as Record<string, unknown>;
+            const allowed = Array.isArray(definitionRecord.allowedAgents)
+              ? definitionRecord.allowedAgents
+                  .map((entry) => (typeof entry === 'string' ? normalizeAgentType(entry) : ''))
+                  .filter((entry) => entry.length > 0)
+              : [];
+
+            const scopeCandidate = definitionRecord.scope;
+            const scope: AgentDefinition['scope'] =
+              scopeCandidate === 'project' || scopeCandidate === 'user' ? scopeCandidate : 'user';
+
+            storedAgentDefinition = {
+              type: normalizeAgentType(derivedAgentType),
+              name:
+                typeof definitionRecord.name === 'string' && definitionRecord.name.trim().length > 0
+                  ? definitionRecord.name
+                  : null,
+              description:
+                typeof definitionRecord.description === 'string' &&
+                definitionRecord.description.trim().length > 0
+                  ? definitionRecord.description
+                  : null,
+              instructions: null,
+              allowedAgents: allowed,
+              model:
+                typeof definitionRecord.model === 'string' && definitionRecord.model.trim().length > 0
+                  ? definitionRecord.model
+                  : null,
+              color:
+                typeof definitionRecord.color === 'string' && definitionRecord.color.trim().length > 0
+                  ? definitionRecord.color
+                  : null,
+              sourcePath:
+                typeof definitionRecord.sourcePath === 'string' &&
+                definitionRecord.sourcePath.trim().length > 0
+                  ? definitionRecord.sourcePath
+                  : null,
+              scope,
+            };
           }
         }
       } catch {
@@ -1201,11 +1344,17 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       }
 
       // Launch a runtime for this existing session, using the incoming message as the initial prompt
-      await startAgentRuntimeProcess(session as ReturnType<typeof createSession>, derivedAgentType, {
-        agentType: derivedAgentType,
-        prompt: payload.prompt,
-        options: { detach: true },
-      }, resumeId);
+      await startAgentRuntimeProcess(
+        session as ReturnType<typeof createSession>,
+        derivedAgentType,
+        {
+          agentType: derivedAgentType,
+          prompt: payload.prompt,
+          options: { detach: true },
+        },
+        resumeId,
+        storedAgentDefinition,
+      );
 
       runtime = agentRuntimes.get(payload.sessionId) ?? null as any;
 

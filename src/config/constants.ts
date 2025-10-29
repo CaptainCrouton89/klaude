@@ -28,15 +28,3 @@ export const MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 // CLI display
 export const TERMINAL_WIDTH = 120;
 export const TABLE_STYLE = 'grid';
-
-// Agent types
-export const VALID_AGENT_TYPES = [
-  'orchestrator',
-  'planner',
-  'programmer',
-  'junior-engineer',
-  'context-engineer',
-  'senior-engineer',
-  'library-docs-writer',
-  'non-dev',
-] as const;

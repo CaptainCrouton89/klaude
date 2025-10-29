@@ -45,6 +45,25 @@ export class ValidationError extends KlaudeError {
 }
 
 /**
+ * Get suggested next steps for an error code
+ */
+function getSuggestion(code: string): string | null {
+  const suggestions: Record<string, string> = {
+    E_LOG_NOT_FOUND: "Run 'klaude sessions' to list available sessions",
+    SESSION_NOT_FOUND: "Run 'klaude sessions' to list available sessions",
+    E_SESSION_NOT_FOUND: "Run 'klaude sessions' to list available sessions",
+    AGENT_NOT_FOUND: "Run 'klaude sessions' to list available sessions",
+    E_AGENT_NOT_RUNNING: "Run 'klaude sessions' to check agent status",
+    E_SWITCH_TARGET_MISSING: "Specify a target session ID or run from within a Claude session",
+    E_INSTANCE_NOT_FOUND: "Run 'klaude instances' to see available instances",
+    E_INVALID_FLAGS: "Run the command with '--help' to see valid flag combinations",
+    E_INVALID_AGENT_COUNT: "Agent count must be a positive number",
+    E_INVALID_WAIT_VALUE: "Wait time must be a number in seconds",
+  };
+  return suggestions[code] || null;
+}
+
+/**
  * Format error for terminal output
  */
 export function formatError(error: unknown): string {
@@ -58,11 +77,22 @@ export function formatError(error: unknown): string {
 }
 
 /**
- * Print error to stderr
+ * Print error to stderr with optional suggestion
  */
 export function printError(error: unknown): void {
   const formatted = formatError(error);
-  stderr.write(`\n❌ ${formatted}\n\n`);
+  let output = `\n❌ ${formatted}`;
+
+  // Add suggestion if available
+  if (error instanceof KlaudeError) {
+    const suggestion = getSuggestion(error.code);
+    if (suggestion) {
+      output += `\n💡 ${suggestion}`;
+    }
+  }
+
+  output += '\n\n';
+  stderr.write(output);
 }
 
 /**
