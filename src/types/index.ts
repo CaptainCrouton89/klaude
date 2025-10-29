@@ -71,5 +71,59 @@ export interface QueryResult<T> {
   error?: string;
 }
 
+/**
+ * Session log event types
+ */
+export interface SessionLogEvent {
+  timestamp?: string;
+  kind: string;
+  payload?: unknown;
+}
+
+export interface AgentRuntimeMessage extends SessionLogEvent {
+  kind: 'agent.runtime.message';
+  payload: {
+    messageType: 'assistant' | 'stream_event' | 'user' | string;
+    text?: string;
+  };
+}
+
+export interface AgentRuntimeResult extends SessionLogEvent {
+  kind: 'agent.runtime.result';
+  payload: {
+    result?: string;
+  };
+}
+
+export interface AgentRuntimeError extends SessionLogEvent {
+  kind: 'agent.runtime.error';
+  payload: {
+    error?: string;
+    message?: string;
+  };
+}
+
+export interface AgentSessionCreated extends SessionLogEvent {
+  kind: 'agent.session.created';
+  payload: {
+    agentType: string;
+    sessionId?: string;
+  };
+}
+
+export interface AgentRuntimeClaudeSession extends SessionLogEvent {
+  kind: 'agent.runtime.claude-session';
+  payload: {
+    sessionId: string;
+  };
+}
+
+export interface WrapperCheckoutResumeSelected extends SessionLogEvent {
+  kind: 'wrapper.checkout.resume_selected';
+  payload: {
+    selectedResumeId: string;
+  };
+}
+
 // Export all database entity types
 export * from './db.js';
