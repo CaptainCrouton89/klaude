@@ -83,3 +83,88 @@ Commands:
       -s, --summary   Summarize the session
 
 Klaude is stateful—session data persists in SQLite after you exit. You can resume or inspect previous sessions later.
+
+## MCP Server Configuration
+
+Agents can be configured with specific MCP (Model Context Protocol) servers, giving them access to different tools and data sources. MCPs are configured at two levels:
+
+### Global MCP Registry
+
+Define available MCP servers in `~/.klaude/config.yaml` or project `.mcp.json`:
+
+**~/.klaude/config.yaml:**
+```yaml
+mcpServers:
+  sql:
+    type: stdio
+    command: npx
+    args: [-y, '@modelcontextprotocol/server-postgres']
+    env:
+      DATABASE_URL: postgresql://localhost/mydb
+  json:
+    type: stdio
+    command: npx
+    args: [-y, '@anthropic-ai/mcp-json']
+  github:
+    type: http
+    url: https://api.githubcopilot.com/mcp/
+```
+
+**Project `.mcp.json`** (standard Claude Code format):
+```json
+{
+  "mcpServers": {
+    "company-api": {
+      "type": "stdio",
+      "command": "/usr/local/bin/company-mcp",
+      "args": ["--config", "./mcp-config.json"]
+    }
+  }
+}
+```
+
+### Per-Agent MCP Configuration
+
+Agents can specify which MCPs they need in their frontmatter:
+
+```markdown
+name: Database Analyst
+description: Analyzes SQL databases and JSON data
+mcpServers: sql, json
+inheritProjectMcps: false
+inheritParentMcps: false
+allowedAgents: junior-engineer
+
+Agent instructions here...
+```
+
+**Frontmatter Fields:**
+- `mcpServers`: Comma-separated list of MCP names from the registry
+- `inheritProjectMcps`: Inherit all MCPs from project `.mcp.json` (default: true)
+- `inheritParentMcps`: Inherit parent agent's MCPs (default: false)
+
+**Resolution Logic:**
+1. If `mcpServers` is specified → Use ONLY those MCPs (explicit override)
+2. Otherwise:
+   - If `inheritProjectMcps !== false` → Start with all project MCPs
+   - If `inheritParentMcps === true` → Add parent's MCPs
+
+**Examples:**
+
+```markdown
+# Agent with specific MCPs only
+mcpServers: sql, json
+inheritProjectMcps: false
+```
+
+```markdown
+# Agent inheriting project defaults plus parent's MCPs
+inheritProjectMcps: true
+inheritParentMcps: true
+```
+
+```markdown
+# Agent with project defaults but not parent's MCPs (default behavior)
+inheritProjectMcps: true
+inheritParentMcps: false
+```
