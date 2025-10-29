@@ -6,7 +6,7 @@ TypeScript types and CRUD operations for SQLite schema entities.
 
 - `project.ts` – Project CRUD (get by hash/id, create, list)
 - `instance.ts` – Instance CRUD (get by id, list, create, mark ended)
-- `session.ts` – Session CRUD (get, list, create, update status/PID/links, manage parent-child hierarchies)
+- `session.ts` – Session CRUD (get, list, create, update status/PID/links, manage parent-child hierarchies, calculate depth)
 - `event.ts` – Event CRUD
 - `runtime-process.ts` – Process runtime CRUD
 - `claude-session-link.ts` – Claude ↔ Klaude link CRUD
@@ -29,6 +29,7 @@ Sessions support parent-child relationships for multi-agent workflows:
 - `getChildSessions(parentId)` – Query child sessions by parent
 - `markSessionOrphaned(sessionId)` – Mark a session orphaned
 - `cascadeMarkSessionEnded(sessionId, status)` – Mark parent ended + auto-orphan children
+- `calculateSessionDepth(sessionId)` – Traverse parent chain to compute depth (0 for root sessions, increments per level; includes circular reference protection)
 
 ## Integration Notes
 
