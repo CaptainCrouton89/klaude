@@ -273,3 +273,41 @@ export function cascadeMarkSessionEnded(sessionId: string, status: SessionStatus
     throw new DatabaseError(`Unable to cascade mark session ended: ${message}`);
   }
 }
+
+/**
+ * Calculate the depth of a session in the agent hierarchy.
+ * Root sessions (parent_id = null) have depth 0.
+ * Each child is one level deeper than its parent.
+ */
+export function calculateSessionDepth(sessionId: string): number {
+  try {
+    let depth = 0;
+    let currentId: string | null = sessionId;
+
+    // Traverse up the parent chain until we reach a root session
+    while (currentId !== null) {
+      const session = getSessionById(currentId);
+      if (!session) {
+        throw new DatabaseError(`Session ${currentId} not found while calculating depth`);
+      }
+
+      if (session.parent_id === null) {
+        // Reached root session
+        break;
+      }
+
+      depth++;
+      currentId = session.parent_id;
+
+      // Safety check: prevent infinite loops in case of circular references
+      if (depth > 100) {
+        throw new DatabaseError(`Depth calculation exceeded maximum (possible circular reference in session hierarchy)`);
+      }
+    }
+
+    return depth;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to calculate session depth: ${message}`);
+  }
+}

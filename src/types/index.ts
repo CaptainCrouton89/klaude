@@ -47,6 +47,7 @@ export interface KlaudeConfig {
     socketDir?: string;
     projectsDir?: string;
     cliFlags?: ClaudeCliFlags;
+    maxAgentDepth?: number;
     switch?: {
       graceSeconds?: number;
     };
