@@ -10,6 +10,7 @@ import {
   loadAgentDefinition,
 } from '@/services/agent-definitions.js';
 import type { AgentDefinition } from '@/services/agent-definitions.js';
+import type { McpServerConfig } from '@/types/index.js';
 import {
   closeDatabase,
   createClaudeSessionLink,
@@ -468,6 +469,39 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       }
     }
 
+    // Load and resolve MCPs for this agent
+    const { loadAvailableMcps } = await import('./mcp-loader.js');
+    const { resolveMcpServers } = await import('./mcp-resolver.js');
+
+    const availableMcps = await loadAvailableMcps(context.projectRoot);
+
+    let parentResolvedMcps: Record<string, McpServerConfig> | undefined;
+    if (parentSession.id !== rootSession.id && parentSession.metadata_json) {
+      try {
+        const parentMeta = JSON.parse(parentSession.metadata_json) as Record<string, unknown>;
+        if (parentMeta.resolvedMcps && typeof parentMeta.resolvedMcps === 'object') {
+          parentResolvedMcps = parentMeta.resolvedMcps as Record<string, McpServerConfig>;
+        }
+      } catch {
+        // Parent metadata not parseable, continue without parent MCPs
+      }
+    }
+
+    let resolvedMcps: Record<string, McpServerConfig> = {};
+    if (agentDefinition) {
+      try {
+        resolvedMcps = resolveMcpServers({
+          availableMcps,
+          agentDefinition,
+          parentMcps: parentResolvedMcps,
+        });
+      } catch (error) {
+        // MCP resolution failure - log but don't fail agent spawn
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[mcp-resolution-failed] sessionId=${parentSession.id}, error=${message}`);
+      }
+    }
+
     const metadata = {
       agentType,
       prompt: payload.prompt,
@@ -484,8 +518,12 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
             color: agentDefinition.color,
             sourcePath: agentDefinition.sourcePath,
             scope: agentDefinition.scope,
+            mcpServers: agentDefinition.mcpServers,
+            inheritProjectMcps: agentDefinition.inheritProjectMcps,
+            inheritParentMcps: agentDefinition.inheritParentMcps,
           }
         : null,
+      resolvedMcps,
     };
 
     const session = createSession(projectRecord.id, 'sdk', {
@@ -842,6 +880,23 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       });
     });
 
+    // Load available MCPs and parent's resolved MCPs
+    const { loadAvailableMcps } = await import('./mcp-loader.js');
+    const availableMcps = await loadAvailableMcps(context.projectRoot);
+
+    let parentMcps: Record<string, unknown> | undefined;
+    if (session.parent_id) {
+      const parentSession = getSessionById(session.parent_id);
+      if (parentSession?.metadata_json) {
+        try {
+          const parentMetadata = JSON.parse(parentSession.metadata_json);
+          parentMcps = parentMetadata.resolvedMcps;
+        } catch {
+          // Parent metadata not parseable, continue without parent MCPs
+        }
+      }
+    }
+
     const configuredModel = agentDefinition?.model ?? config.sdk?.model ?? null;
     const runtimeInitPayload = {
       sessionId: session.id,
@@ -864,6 +919,8 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         permissionMode: config.sdk?.permissionMode ?? null,
         fallbackModel: config.sdk?.fallbackModel ?? null,
       },
+      availableMcps,
+      parentMcps,
     };
 
     try {

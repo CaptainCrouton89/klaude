@@ -14,6 +14,21 @@ export interface AgentDefinition {
   color: string | null;
   sourcePath: string | null;
   scope: AgentDefinitionScope;
+  /**
+   * MCP server names to enable for this agent (e.g., ['sql', 'json'])
+   * References names from available MCP registries (.mcp.json, config.yaml)
+   */
+  mcpServers?: string[];
+  /**
+   * Whether to inherit MCPs from project .mcp.json
+   * Default: true (inherit project MCPs unless explicitly disabled)
+   */
+  inheritProjectMcps?: boolean;
+  /**
+   * Whether to inherit MCPs from parent agent
+   * Default: false (independent MCP configuration unless explicitly enabled)
+   */
+  inheritParentMcps?: boolean;
 }
 
 export interface AgentDefinitionLoadOptions {
@@ -81,6 +96,30 @@ function parseAllowedAgents(value: string): string[] {
     .filter((part) => part.length > 0);
 }
 
+function parseMcpServers(value: string): string[] {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split(/[\s,]+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+function parseBoolean(value: string | undefined): boolean | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') {
+    return false;
+  }
+  return undefined;
+}
+
 function sanitizeText(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
@@ -115,6 +154,9 @@ async function parseAgentFile(
   const allowedAgents = metadata.allowedagents
     ? parseAllowedAgents(metadata.allowedagents)
     : [];
+  const mcpServers = metadata.mcpservers ? parseMcpServers(metadata.mcpservers) : undefined;
+  const inheritProjectMcps = parseBoolean(metadata.inheritprojectmcps);
+  const inheritParentMcps = parseBoolean(metadata.inheritparentmcps);
 
   return {
     type: normalizedType,
@@ -126,6 +168,9 @@ async function parseAgentFile(
     color: sanitizeText(metadata.color),
     sourcePath: agentPath,
     scope,
+    mcpServers,
+    inheritProjectMcps,
+    inheritParentMcps,
   };
 }
 
