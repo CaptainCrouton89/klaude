@@ -18,7 +18,9 @@ import { registerEnterAgentCommand } from '@/commands/enter-agent.js';
 import { registerMessageCommand } from '@/commands/message.js';
 import { registerInterruptCommand } from '@/commands/interrupt.js';
 import { registerSessionsCommand } from '@/commands/sessions.js';
-import { registerReadCommand } from '@/commands/read.js';
+import { registerLogsCommand } from '@/commands/logs.js';
+import { registerWaitCommand } from '@/commands/wait.js';
+import { registerStatusCommand } from '@/commands/status.js';
 
 // Extract Claude CLI flags before Commander processes arguments
 // Commander treats everything after -- as positional args, which causes issues
@@ -97,7 +99,9 @@ registerEnterAgentCommand(program);
 registerMessageCommand(program);
 registerInterruptCommand(program);
 registerSessionsCommand(program);
-registerReadCommand(program);
+registerLogsCommand(program);
+registerWaitCommand(program);
+registerStatusCommand(program);
 
 // Default action (no command = start wrapper instance)
 program.action(async (options: OptionValues) => {

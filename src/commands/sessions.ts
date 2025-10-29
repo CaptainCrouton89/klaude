@@ -1,6 +1,7 @@
 import { Command, OptionValues } from 'commander';
 import { prepareProjectContext } from '@/services/project-context.js';
 import {
+  calculateSessionDepth,
   closeDatabase,
   getProjectByHash,
   initializeDatabase,
@@ -48,6 +49,8 @@ export function registerSessionsCommand(program: Command): void {
             console.log(baseLine);
 
             if (options.verbose) {
+              const depth = calculateSessionDepth(session.id);
+              console.log(`  depth: ${depth}`);
               if (session.prompt) {
                 console.log(`  prompt: ${session.prompt}`);
               }
