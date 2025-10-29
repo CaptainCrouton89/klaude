@@ -21,7 +21,7 @@ TypeScript/Node.js project. Wrapper that spawns Claude Code as a subprocess and 
 
 ```bash
 npm install
-npm run build          # tsc + tsc-alias + npm link (installs globally)
+npm run build          # tsc + tsc-alias + npm link
 npm run dev           # tsc --watch
 npm test              # vitest
 npm run lint          # eslint
@@ -30,38 +30,19 @@ npm run format        # prettier
 
 ## CLI Commands
 
-**User-facing:**
 - `klaude` – Start wrapper + Claude TUI
-- `klaude start <agent_type> <prompt> [options]` – Spawn agent
-  - `-c, --checkout` – Checkout immediately after starting
-  - `-s, --share` – Share context (last X messages) with new agent
-  - `-a, --attach` – Attach to agent stream (blocks until completion)
-- `klaude checkout [id]` – Switch to agent via Claude `--resume`
-  - `--timeout <seconds>` – Wait for hooks (default: 5)
-- `enter-agent [id]` – Alias for `klaude checkout`
-- `klaude wait <id...>` – Block until agent(s) complete
-  - `--timeout <seconds>` – Maximum wait time
-  - `--any` – Return when ANY complete (vs ALL)
-- `klaude status <id...>` – Check status of agent session(s)
-- `klaude message <id> <prompt>` – Send async message to running agent
-  - `--timeout <seconds>` – Wait for response (default: 5)
+- `klaude start <agent_type> <prompt>` – Spawn agent (-c/--checkout, -s/--share, -a/--attach options)
+- `klaude checkout [id]` / `enter-agent [id]` – Switch to agent session
+- `klaude wait <id...>` – Block until agent(s) complete (--timeout, --any options)
+- `klaude status <id...>` – Check agent session status
+- `klaude message <id> <prompt>` – Send async message to agent
 - `klaude interrupt <id>` – SIGINT/SIGTERM to agent runtime
-- `klaude sessions [-v]` – List sessions (verbose shows details)
-- `klaude logs <id>` – Read session logs
-  - `-f, --follow` – Stream continuously (like tail -f)
-  - `-s, --summary` – Summarize session
-  - `--raw` – Show raw JSON events
-  - `-n, --lines <N>` – Limit output to N lines (shows last N)
-  - `--tail <N>` – Show last N lines (alias for -n)
-  - `--head <N>` – Show first N lines
-  - `--instance <id>` – Target specific wrapper instance
+- `klaude sessions [-v]` – List sessions
+- `klaude logs <id>` – Read session logs (-f/--follow, -s/--summary, -n/--lines, --head, --tail)
 - `klaude instances [--status]` – List active wrapper instances
 - `klaude setup-hooks` – Install hooks to ~/.claude/settings.json
 
-**Internal:**
-- `klaude hook session-start|session-end` – Hook handler (spawned by Claude)
-
-**Agent Discovery**: Agent types are dynamically loaded from your agents directory (`~/.claude/agents/` or `./.claude/agents/`). Any agent definition available there can be spawned with `klaude start <agent_name> <prompt>`.
+Agent types are dynamically loaded from `~/.claude/agents/` or `./.claude/agents/`.
 
 ## MCP Server Configuration
 
@@ -142,11 +123,11 @@ Wrapper exports: `KLAUDE_PROJECT_HASH`, `KLAUDE_INSTANCE_ID`, `KLAUDE_SESSION_ID
 
 ## Core Files
 
-- `src/index.ts` – CLI entry point (Commander)
-- `src/config/` – Config loading, project hashing, defaults
+- `src/index.ts` – CLI entry point
+- `src/config/` – Config loading, project hashing
 - `src/db/` – SQLite initialization, WAL mode, CRUD
 - `src/services/` – Wrapper orchestration, MCP loading, agent runtime
-- `src/types/` – TypeScript interfaces for DB and CLI
+- `src/types/` – TypeScript interfaces
 - `src/utils/` – Path helpers, ULID generation
 
 ## Key Constraints
