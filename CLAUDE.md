@@ -10,7 +10,8 @@ TypeScript/Node.js project. Wrapper that spawns Claude Code as a subprocess and 
 
 **Key paths**:
 - `~/.klaude/sessions.db` – SQLite DB (projects, instances, sessions, events, links)
-- `~/.klaude/config.yaml` – Config (claudeBinary, socketDir, switch.graceSeconds, mcpServers)
+- `~/.klaude/config.yaml` – Config (claudeBinary, socketDir, switch.graceSeconds)
+- `~/.klaude/.mcp.json` – Global MCP server registry
 - `~/.klaude/run/<projectHash>/` – Per-project runtime (sockets, instance registry)
 - `~/.klaude/projects/<projectHash>/logs/` – Session logs
 
@@ -29,50 +30,62 @@ npm run format        # prettier
 
 ## CLI Commands
 
-All commands work from within the Claude Code TUI spawned by the wrapper:
-
+**User-facing:**
 - `klaude` – Start wrapper + Claude TUI
-- `klaude start <agent_type> <prompt> [options]` – Spawn agent (type loaded from agents directory)
+- `klaude start <agent_type> <prompt> [options]` – Spawn agent
   - `-c, --checkout` – Checkout immediately after starting
   - `-s, --share` – Share context (last X messages) with new agent
-  - `-d, --detach` – Start without streaming output
+  - `-d, --detach` – Start without streaming output (default)
+  - `--attach` – Attach to agent stream in foreground
 - `klaude checkout [id]` – Switch to agent via Claude `--resume`
+- `enter-agent [id]` – Alias for `klaude checkout`
 - `klaude message <id> <prompt> [-w, --wait]` – Send async message to running agent
 - `klaude interrupt <id>` – SIGINT/SIGTERM to agent runtime
 - `klaude sessions [-v]` – List sessions (verbose shows details)
 - `klaude read <id> [-t | -s]` – Read session log (tail or summarize)
-- `klaude instances` – List active wrapper instances
-- `klaude hook session-start|session-end` – Hook handler (internal)
+- `klaude instances [--status]` – List active wrapper instances
+- `klaude setup-hooks` – Install hooks to ~/.claude/settings.json
+
+**Internal:**
+- `klaude hook session-start|session-end` – Hook handler (spawned by Claude)
 
 **Agent Discovery**: Agent types are dynamically loaded from your agents directory (`~/.claude/agents/` or `./.claude/agents/`). Any agent definition available there can be spawned with `klaude start <agent_name> <prompt>`.
 
 ## MCP Server Configuration
 
-Agents can be configured with specific MCP (Model Context Protocol) servers. MCPs are resolved in three phases: global registry → project config → per-agent config.
+MCPs are resolved hierarchically: global registry → project config → per-agent overrides.
 
-### Global MCP Registry
+### MCP Registries
 
-Define available MCPs in `~/.klaude/config.yaml` or project `.mcp.json`:
+**Global** (`~/.klaude/.mcp.json`):
+```json
+{
+  "mcpServers": {
+    "sql": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {"DATABASE_URL": "postgresql://localhost/mydb"}
+    }
+  }
+}
+```
 
-```yaml
-# ~/.klaude/config.yaml
-mcpServers:
-  sql:
-    type: stdio
-    command: npx
-    args: [-y, '@modelcontextprotocol/server-postgres']
-    env:
-      DATABASE_URL: postgresql://localhost/mydb
-  json:
-    type: stdio
-    command: npx
-    args: [-y, '@anthropic-ai/mcp-json']
+**Project** (`.mcp.json` in project root):
+```json
+{
+  "mcpServers": {
+    "company-api": {
+      "type": "stdio",
+      "command": "/usr/local/bin/company-mcp"
+    }
+  }
+}
 ```
 
 ### Per-Agent MCP Configuration
 
-Agents specify MCPs in frontmatter:
-
+In agent frontmatter:
 ```markdown
 name: Database Analyst
 mcpServers: sql, json
@@ -80,14 +93,15 @@ inheritProjectMcps: false
 inheritParentMcps: false
 ```
 
-**Frontmatter fields:**
-- `mcpServers` – Comma-separated list of MCP names (explicit override)
-- `inheritProjectMcps` – Inherit all MCPs from project `.mcp.json` (default: true)
-- `inheritParentMcps` – Inherit parent agent's MCPs (default: false)
+**Fields:**
+- `mcpServers` – Explicit MCP list (overrides inheritance)
+- `inheritProjectMcps` – Include project `.mcp.json` MCPs (default: true)
+- `inheritParentMcps` – Include parent agent's MCPs (default: false)
 
-**Resolution logic:**
-1. If `mcpServers` specified → Use only those MCPs
-2. Otherwise: Start with project MCPs (if `inheritProjectMcps !== false`), then add parent's MCPs (if `inheritParentMcps === true`)
+**Resolution (in order):**
+1. If `mcpServers` specified → Use only those
+2. If `inheritProjectMcps !== false` → Add project MCPs
+3. If `inheritParentMcps === true` → Add parent's MCPs
 
 ## Hooks Setup
 
@@ -101,6 +115,8 @@ Install in `./.claude/settings.local.json`:
 }
 ```
 
+Or use: `klaude setup-hooks` (installs to ~/.claude/settings.json)
+
 Wrapper exports: `KLAUDE_PROJECT_HASH`, `KLAUDE_INSTANCE_ID`, `KLAUDE_SESSION_ID`
 
 ## Implementation Status
@@ -110,7 +126,7 @@ Wrapper exports: `KLAUDE_PROJECT_HASH`, `KLAUDE_INSTANCE_ID`, `KLAUDE_SESSION_ID
 ✓ Hooks (session-start/session-end)
 ✓ Agent runtime (SDK runner, event streaming)
 ✓ MCP server configuration (resolution logic)
-✓ UX polish (sessions -v, read -t/-s, error handling, complete docs)
+✓ CLI polish (sessions -v, read -t/-s, enter-agent alias, setup-hooks)
 
 ## Core Files
 
@@ -130,7 +146,7 @@ Wrapper exports: `KLAUDE_PROJECT_HASH`, `KLAUDE_INSTANCE_ID`, `KLAUDE_SESSION_ID
 
 ## Notes
 
-- See `prd.md` for full architecture, schema, CLI spec, error model
-- See `README.md` for user-facing examples and quick start
+- See `README.md` for full CLI spec and examples
+- See `prd.md` for architecture, schema, and error model
 - Hooks are critical for `--resume` checkout; without them, operations fail with clear errors
-- MCP configuration is hierarchical: global registry → project config → per-agent overrides
+- MCP configuration is now JSON-based (`~/.klaude/.mcp.json` and `.mcp.json`)
