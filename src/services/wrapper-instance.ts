@@ -288,6 +288,10 @@ interface AgentRuntimeState {
 export async function startWrapperInstance(options: WrapperStartOptions = {}): Promise<void> {
   const cwd = options.projectCwd ?? process.cwd();
 
+  debugLog(
+    `[node-runtime] version=${process.version}, modules=${process.versions.modules}, execPath=${process.execPath}`,
+  );
+
   const config = await loadConfig();
   const context = await prepareProjectContext(cwd);
 
@@ -1295,17 +1299,25 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     const deadline = Date.now() + normalizedWait * 1000;
     const pollDelayMs = 200;
 
+    debugLog(`[wait-claude-session-id] sessionId=${sessionId}, waitSeconds=${waitSeconds}`);
+
+    let pollCount = 0;
     while (true) {
+      pollCount++;
       const session = getSessionById(sessionId);
       if (!session) {
         throw new KlaudeError(`Session ${sessionId} not found`, 'E_SESSION_NOT_FOUND');
       }
 
+      verboseLog(`[wait-claude-session-id] poll=${pollCount}, last_claude_session_id=${session.last_claude_session_id || 'null'}`);
+
       if (session.last_claude_session_id) {
+        debugLog(`[wait-claude-session-id] Found Claude session ID after ${pollCount} polls: ${session.last_claude_session_id}`);
         return session.last_claude_session_id;
       }
 
       if (normalizedWait === 0 || Date.now() >= deadline) {
+        debugLog(`[wait-claude-session-id] Timeout after ${pollCount} polls (deadline reached)`);
         break;
       }
 
@@ -1464,12 +1476,23 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       args.push(...storedFlags.oneTime);
     }
 
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       KLAUDE_PROJECT_HASH: context.projectHash,
       KLAUDE_INSTANCE_ID: instanceId,
       KLAUDE_SESSION_ID: sessionId,
+      KLAUDE_NODE_BIN: process.execPath,
+      KLAUDE_NODE_MODULE_VERSION: process.versions.modules,
+      KLAUDE_NODE_VERSION: process.version,
     };
+    delete env.KLAUDE_NODE_REEXEC;
+    env.KLAUDE_NODE_REEXEC = '0';
+
+    debugLog(`[claude-env] Setting environment variables:`);
+    debugLog(`  KLAUDE_PROJECT_HASH=${context.projectHash}`);
+    debugLog(`  KLAUDE_INSTANCE_ID=${instanceId}`);
+    debugLog(`  KLAUDE_SESSION_ID=${sessionId}`);
+    debugLog(`[claude-spawn] stdin.isTTY=${process.stdin.isTTY}, stdout.isTTY=${process.stdout.isTTY}`);
 
     const sessionLogPath = getSessionLogPath(
       context.projectHash,
