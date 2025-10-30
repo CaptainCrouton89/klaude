@@ -1,11 +1,19 @@
 #!/usr/bin/env node
 
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import type { Command as CommanderCommand, OptionValues } from 'commander';
 import type { ClaudeCliFlags } from '@/types/index.js';
 
 import { ensureCompatibleNode, logBootstrap } from '@/utils/bootstrap.js';
+
+// Read version from package.json
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const packageJsonPath = path.join(__dirname, '..', 'package.json');
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8')) as { version: string };
+const VERSION = packageJson.version;
 
 
 // Extract Claude CLI flags before Commander processes arguments
@@ -64,6 +72,7 @@ void (async () => {
   program
     .name('klaude')
     .description('Multi-agent wrapper for Claude Code sessions')
+    .version(VERSION)
     .option('-C, --cwd <path>', 'Project directory override')
     .showHelpAfterError('(add --help for additional information)')
     .addHelpCommand(true);
@@ -78,11 +87,16 @@ void (async () => {
   });
 
   program.exitOverride((err) => {
+    // Handle successful exits (help, version, etc.)
+    if (err.exitCode === 0) {
+      process.exit(0);
+    }
+
     if (!err.message) {
       throw err;
     }
 
-    if (err.message === '(outputHelp)' || err.message === '(default)') {
+    if (err.message === '(outputHelp)' || err.message === '(outputVersion)' || err.message === '(default)') {
       process.exit(err.exitCode ?? 0);
     }
 
