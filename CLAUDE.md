@@ -16,11 +16,11 @@ TypeScript/Node.js project. Wrapper that spawns Claude Code as a subprocess and 
 ## Build/Dev/Test
 
 ```bash
-npm install
-npm run build          # tsc + tsc-alias
-npm run dev            # tsc --watch
-npm test               # vitest
-npm run lint           # eslint
+pnpm install
+pnpm run build          # tsc + tsc-alias
+pnpm run dev            # tsc --watch
+pnpm test               # vitest
+pnpm run lint           # eslint
 ```
 
 ## Architecture
