@@ -826,19 +826,23 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     );
 
     debugLog(`[runtime-spawn] entry=${agentRuntimeEntryPath}`);
+    const fullSessionId = session.id;
+    const shortSessionId = abbreviateSessionId(fullSessionId);
+
     const child = spawn(process.execPath, [agentRuntimeEntryPath], {
       cwd: context.projectRoot,
       env: {
         ...process.env,
         KLAUDE_PROJECT_HASH: context.projectHash,
         KLAUDE_INSTANCE_ID: instanceId,
-        KLAUDE_SESSION_ID: abbreviateSessionId(session.id),
+        KLAUDE_SESSION_ID: fullSessionId,
+        KLAUDE_SESSION_ID_SHORT: shortSessionId,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     const runtimeState: AgentRuntimeState = {
-      sessionId: session.id,
+      sessionId: fullSessionId,
       process: child,
       runtimeProcessId: null,
       status: 'pending',
@@ -1029,13 +1033,17 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       : payload.prompt;
     cursorArgs.push(cursorPrompt);
 
+    const fullSessionId = session.id;
+    const shortSessionId = abbreviateSessionId(fullSessionId);
+
     const child = spawn('cursor-agent', cursorArgs, {
       cwd: context.projectRoot,
       env: {
         ...process.env,
         KLAUDE_PROJECT_HASH: context.projectHash,
         KLAUDE_INSTANCE_ID: instanceId,
-        KLAUDE_SESSION_ID: abbreviateSessionId(session.id),
+        KLAUDE_SESSION_ID: fullSessionId,
+        KLAUDE_SESSION_ID_SHORT: shortSessionId,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -1479,12 +1487,13 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       args.push(...storedFlags.oneTime);
     }
 
-    const abbrevSessionId = abbreviateSessionId(sessionId);
+    const sessionIdShort = abbreviateSessionId(sessionId);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       KLAUDE_PROJECT_HASH: context.projectHash,
       KLAUDE_INSTANCE_ID: instanceId,
-      KLAUDE_SESSION_ID: abbrevSessionId,
+      KLAUDE_SESSION_ID: sessionId,
+      KLAUDE_SESSION_ID_SHORT: sessionIdShort,
       KLAUDE_NODE_BIN: process.execPath,
       KLAUDE_NODE_MODULE_VERSION: process.versions.modules,
       KLAUDE_NODE_VERSION: process.version,
@@ -1495,7 +1504,8 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     debugLog(`[claude-env] Setting environment variables:`);
     debugLog(`  KLAUDE_PROJECT_HASH=${context.projectHash}`);
     debugLog(`  KLAUDE_INSTANCE_ID=${instanceId}`);
-    debugLog(`  KLAUDE_SESSION_ID=${abbrevSessionId}`);
+    debugLog(`  KLAUDE_SESSION_ID=${sessionId}`);
+    debugLog(`  KLAUDE_SESSION_ID_SHORT=${sessionIdShort}`);
     debugLog(`[claude-spawn] stdin.isTTY=${process.stdin.isTTY}, stdout.isTTY=${process.stdout.isTTY}`);
 
     const sessionLogPath = getSessionLogPath(
