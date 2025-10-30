@@ -6,7 +6,7 @@ Core business logic for spawning Claude, managing wrapper instances, coordinatin
 
 **Socket-based IPC**: Wrapper instance listens on `~/.klaude/run/<projectHash>/<instanceId>.sock`. Clients send newline-delimited JSON requests; wrapper responds with JSON and closes socket (one-shot per connection).
 
-**Agent Definition Loading** (`agent-definitions.ts`): Parses agent markdown files from project and user directories. Files use YAML-style key:value header (name, description, allowedAgents, model, color, mcpServers) followed by instructions. Caching prevents repeated file reads.
+**Agent Definition Loading** (`agent-definitions.ts`): Parses agent markdown files from project and user directories. Files use YAML frontmatter (delimited by `---`) with metadata keys (name, description, allowedAgents, model, color, mcpServers, inheritProjectMcps, inheritParentMcps) followed by instructions. Supports arrays, booleans, and strings in frontmatter. Caching prevents repeated file reads.
 
 **MCP Resolution** (`mcp-loader.ts`, `mcp-resolver.ts`): Loads MCPs from project `.mcp.json` and `~/.klaude/.mcp.json` (global registry). Agents inherit project MCPs by default; can override with `mcpServers` frontmatter or inherit parent agent's MCPs via `inheritParentMcps: true`.
 
@@ -25,7 +25,7 @@ Core business logic for spawning Claude, managing wrapper instances, coordinatin
 | File | Purpose |
 |------|---------|
 | `wrapper-instance.ts` | Socket server, Claude/agent spawn, event streaming, session checkout |
-| `agent-definitions.ts` | Parse agent markdown metadata, compose prompts, manage agent cache |
+| `agent-definitions.ts` | Parse agent markdown YAML frontmatter, compose prompts, manage agent cache |
 | `session-log.ts` | Read/tail/format session logs; filter messages, summarize, wait for output |
 | `config-loader.ts` | Load/merge configuration from `config.yaml` with defaults |
 | `mcp-loader.ts` | Load MCPs from project `.mcp.json` and `~/.klaude/.mcp.json` |
