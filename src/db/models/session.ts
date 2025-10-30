@@ -275,6 +275,53 @@ export function cascadeMarkSessionEnded(sessionId: string, status: SessionStatus
 }
 
 /**
+ * Resolve an abbreviated session ID (last 6 characters) or full ID to a full session ID.
+ * If multiple sessions match the suffix, returns the most recently updated one.
+ *
+ * @param idOrSuffix - Full session ID or last 6 characters
+ * @param projectId - Project ID to scope the search
+ * @returns Full session ID
+ * @throws DatabaseError if no matching session found
+ */
+export function resolveSessionId(idOrSuffix: string, projectId: number): string {
+  try {
+    const db = getDatabase();
+
+    // First try exact match (for backward compatibility with full IDs)
+    const exactStmt = db.prepare(
+      `SELECT id
+       FROM sessions
+       WHERE id = ? AND project_id = ?`,
+    );
+    const exactMatch = exactStmt.get(idOrSuffix, projectId) as { id: string } | undefined;
+    if (exactMatch) {
+      return exactMatch.id;
+    }
+
+    // Try suffix match (last 6 characters of ULID)
+    const suffixStmt = db.prepare(
+      `SELECT id
+       FROM sessions
+       WHERE project_id = ? AND SUBSTR(id, -6) = ?
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+    );
+    const suffixMatch = suffixStmt.get(projectId, idOrSuffix) as { id: string } | undefined;
+    if (suffixMatch) {
+      return suffixMatch.id;
+    }
+
+    throw new DatabaseError(`Session not found: ${idOrSuffix}`);
+  } catch (error) {
+    if (error instanceof DatabaseError) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DatabaseError(`Unable to resolve session ID: ${message}`);
+  }
+}
+
+/**
  * Calculate the depth of a session in the agent hierarchy.
  * Root sessions (parent_id = null) have depth 0.
  * Each child is one level deeper than its parent.

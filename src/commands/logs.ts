@@ -10,6 +10,8 @@ import {
 } from '@/services/session-log.js';
 import { KlaudeError, printError } from '@/utils/error-handler.js';
 import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
+import { resolveSessionId } from '@/db/models/session.js';
+import { initializeDatabase, closeDatabase, getProjectByHash } from '@/db/index.js';
 
 /**
  * Register the 'klaude logs' command.
@@ -66,9 +68,18 @@ export function registerLogsCommand(program: Command): void {
         const context = await prepareProjectContext(projectCwd);
         const config = await loadConfig();
 
+        // Resolve abbreviated session ID
+        await initializeDatabase();
+        const project = getProjectByHash(context.projectHash);
+        if (!project) {
+          throw new KlaudeError('Project not found', 'E_PROJECT_NOT_FOUND');
+        }
+        const resolvedSessionId = resolveSessionId(sessionId, project.id);
+        closeDatabase();
+
         const logPath = getSessionLogPath(
           context.projectHash,
-          sessionId,
+          resolvedSessionId,
           config.wrapper?.projectsDir,
         );
 

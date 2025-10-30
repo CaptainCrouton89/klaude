@@ -3,7 +3,9 @@ import { prepareProjectContext } from '@/services/project-context.js';
 import { requestCheckout } from '@/services/instance-client.js';
 import { resolveInstanceForProject } from '@/services/instance-selection.js';
 import { KlaudeError, printError } from '@/utils/error-handler.js';
-import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
+import { resolveProjectDirectory, abbreviateSessionId } from '@/utils/cli-helpers.js';
+import { resolveSessionId } from '@/db/models/session.js';
+import { initializeDatabase, closeDatabase, getProjectByHash } from '@/db/index.js';
 
 /**
  * Register the 'klaude checkout' command.
@@ -33,10 +35,22 @@ export function registerCheckoutCommand(program: Command): void {
           throw new KlaudeError('Timeout value must be numeric', 'E_INVALID_TIMEOUT_VALUE');
         }
 
+        // Resolve abbreviated session ID if provided
+        let resolvedSessionId: string | undefined;
+        if (sessionId) {
+          await initializeDatabase();
+          const project = getProjectByHash(context.projectHash);
+          if (!project) {
+            throw new KlaudeError('Project not found', 'E_PROJECT_NOT_FOUND');
+          }
+          resolvedSessionId = resolveSessionId(sessionId, project.id);
+          closeDatabase();
+        }
+
         const fromSessionId = process.env.KLAUDE_SESSION_ID;
 
         const response = await requestCheckout(instance.socketPath, {
-          sessionId: sessionId ?? undefined,
+          sessionId: resolvedSessionId,
           fromSessionId,
           waitSeconds: timeoutSeconds,
         });
@@ -47,7 +61,7 @@ export function registerCheckoutCommand(program: Command): void {
 
         const result = response.result as { sessionId: string; claudeSessionId: string };
         console.log(
-          `Checkout activated for session ${result.sessionId} (resume ${result.claudeSessionId}).`,
+          `Checkout activated for session ${abbreviateSessionId(result.sessionId)} (resume ${result.claudeSessionId}).`,
         );
       } catch (error) {
         printError(error);

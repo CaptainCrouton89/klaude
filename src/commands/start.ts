@@ -2,7 +2,7 @@ import { requestCheckout, startAgentSession } from '@/services/instance-client.j
 import { resolveInstanceForProject } from '@/services/instance-selection.js';
 import { prepareProjectContext } from '@/services/project-context.js';
 import { tailSessionLog } from '@/services/session-log.js';
-import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
+import { resolveProjectDirectory, abbreviateSessionId } from '@/utils/cli-helpers.js';
 import { KlaudeError, printError } from '@/utils/error-handler.js';
 import { Command, OptionValues } from 'commander';
 
@@ -56,9 +56,10 @@ export function registerStartCommand(program: Command): void {
 
         const result = response.result;
         const runtimeKind = result.runtimeKind ?? 'claude';
+        const abbrevId = abbreviateSessionId(result.sessionId);
 
         if (options.verbose) {
-          console.log(`Started agent session ${result.sessionId} (${result.agentType})`);
+          console.log(`Started agent session ${abbrevId} (${result.agentType})`);
           console.log(`Instance: ${result.instanceId}`);
           console.log(`Status: ${result.status}`);
           console.log(`Log: ${result.logPath}`);
@@ -66,18 +67,18 @@ export function registerStartCommand(program: Command): void {
 
         // By default, print concise, agent-friendly hints (but not in attach mode)
         if (!options.verbose && !options.attach) {
-          console.log(`session: ${result.sessionId} (agent=${result.agentType})`);
+          console.log(`session: ${abbrevId} (agent=${result.agentType})`);
           console.log('Next steps:');
-          console.log(`  - Tail output:   klaude logs ${result.sessionId} -f`);
-          console.log(`  - Check status:  klaude status ${result.sessionId}`);
-          console.log(`  - Wait for done: klaude wait ${result.sessionId}`);
+          console.log(`  - Tail output:   klaude logs ${abbrevId} -f`);
+          console.log(`  - Check status:  klaude status ${abbrevId}`);
+          console.log(`  - Wait for done: klaude wait ${abbrevId}`);
           if (runtimeKind === 'claude') {
-            console.log(`  - Enter TUI:     klaude checkout ${result.sessionId}`);
-            console.log(`  - Message:       klaude message ${result.sessionId} "<prompt>" --timeout 5`);
+            console.log(`  - Enter TUI:     klaude checkout ${abbrevId}`);
+            console.log(`  - Message:       klaude message ${abbrevId} "<prompt>" --timeout 5`);
           } else {
             console.log(`  - Rerun prompt:  klaude start ${result.agentType} "<prompt>"`);
           }
-          console.log(`  - Interrupt:     klaude interrupt ${result.sessionId}`);
+          console.log(`  - Interrupt:     klaude interrupt ${abbrevId}`);
           if (runtimeKind === 'cursor') {
             console.log('Note: Cursor sessions do not support checkout or message flows.');
           }
@@ -101,10 +102,10 @@ export function registerStartCommand(program: Command): void {
           checkoutPerformed = true;
           if (options.verbose) {
             console.log(
-              `Checkout activated for session ${checkoutResult.sessionId} (resume ${checkoutResult.claudeSessionId}).`,
+              `Checkout activated for session ${abbreviateSessionId(checkoutResult.sessionId)} (resume ${checkoutResult.claudeSessionId}).`,
             );
           } else {
-            console.log(`session: ${checkoutResult.sessionId} (entered via resume)`);
+            console.log(`session: ${abbreviateSessionId(checkoutResult.sessionId)} (entered via resume)`);
           }
         }
         // Attach only if explicitly requested
@@ -112,9 +113,9 @@ export function registerStartCommand(program: Command): void {
           await tailSessionLog(result.logPath, { untilExit: true, raw: Boolean(options.verbose) });
           // Print session metadata after completion for easy reference
           if (!options.verbose) {
-            console.log(`\nsession: ${result.sessionId}`);
-            console.log(`  - Check out:               klaude checkout ${result.sessionId}`);
-            console.log(`  - Send follow-up message:  klaude message ${result.sessionId} "<prompt>"`);
+            console.log(`\nsession: ${abbrevId}`);
+            console.log(`  - Check out:               klaude checkout ${abbrevId}`);
+            console.log(`  - Send follow-up message:  klaude message ${abbrevId} "<prompt>"`);
           }
         }
       } catch (error) {

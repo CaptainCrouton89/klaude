@@ -43,3 +43,11 @@ export async function readStdin(): Promise<string> {
     });
   });
 }
+
+/**
+ * Abbreviate a session ID by taking the last 6 characters (random portion of ULID).
+ * ULIDs are 26 chars: 10 char timestamp + 16 char random. Last 6 chars provide good uniqueness.
+ */
+export function abbreviateSessionId(sessionId: string): string {
+  return sessionId.slice(-6);
+}

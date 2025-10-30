@@ -7,7 +7,8 @@ import {
   initializeDatabase,
 } from '@/db/index.js';
 import { printError } from '@/utils/error-handler.js';
-import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
+import { resolveProjectDirectory, abbreviateSessionId } from '@/utils/cli-helpers.js';
+import { resolveSessionId } from '@/db/models/session.js';
 
 /**
  * Terminal session statuses that indicate completion
@@ -53,8 +54,11 @@ export function registerWaitCommand(program: Command): void {
           const intervalMs = parseInt(options.interval, 10);
           const waitForAny = options.any as boolean;
 
+          // Resolve abbreviated session IDs to full IDs
+          const resolvedSessionIds = sessionIds.map(id => resolveSessionId(id, project.id));
+
           // Validate session IDs exist and belong to this project
-          const sessions = sessionIds.map((id) => {
+          const sessions = resolvedSessionIds.map((id) => {
             const session = getSessionById(id);
             if (!session) {
               throw new Error(`Session ${id} not found`);
@@ -71,7 +75,7 @@ export function registerWaitCommand(program: Command): void {
           // Show initial status
           console.log(`⏳ Waiting for ${waitForAny ? 'ANY' : 'ALL'} of ${sessionIds.length} session(s) to complete...`);
           for (const session of sessions) {
-            console.log(`   ${session.id} [${session.status}]`);
+            console.log(`   ${abbreviateSessionId(session.id)} [${session.status}]`);
           }
 
           // Poll loop
@@ -84,7 +88,7 @@ export function registerWaitCommand(program: Command): void {
             }
 
             // Query current status of all sessions
-            const statuses = sessionIds.map((id) => {
+            const statuses = resolvedSessionIds.map((id) => {
               const session = getSessionById(id);
               return session ? session.status : null;
             });
@@ -95,10 +99,10 @@ export function registerWaitCommand(program: Command): void {
               const anyTerminal = statuses.some((status) => status && isTerminal(status));
               if (anyTerminal) {
                 console.log('\n✅ At least one session completed');
-                for (let i = 0; i < sessionIds.length; i++) {
+                for (let i = 0; i < resolvedSessionIds.length; i++) {
                   const status = statuses[i];
                   if (status && isTerminal(status)) {
-                    console.log(`   ${sessionIds[i]} → ${status}`);
+                    console.log(`   ${abbreviateSessionId(resolvedSessionIds[i])} → ${status}`);
                   }
                 }
                 return;
@@ -108,8 +112,8 @@ export function registerWaitCommand(program: Command): void {
               const allTerminal = statuses.every((status) => status && isTerminal(status));
               if (allTerminal) {
                 console.log('\n✅ All sessions completed');
-                for (let i = 0; i < sessionIds.length; i++) {
-                  console.log(`   ${sessionIds[i]} → ${statuses[i]}`);
+                for (let i = 0; i < resolvedSessionIds.length; i++) {
+                  console.log(`   ${abbreviateSessionId(resolvedSessionIds[i])} → ${statuses[i]}`);
                 }
                 return;
               }

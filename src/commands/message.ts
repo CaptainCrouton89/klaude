@@ -7,6 +7,8 @@ import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
 import { loadConfig } from '@/services/config-loader.js';
 import { getSessionLogPath } from '@/utils/path-helper.js';
 import { waitForFirstAssistantOutput } from '@/services/session-log.js';
+import { resolveSessionId } from '@/db/models/session.js';
+import { initializeDatabase, closeDatabase, getProjectByHash } from '@/db/index.js';
 
 /**
  * Register the 'klaude message' command.
@@ -37,8 +39,17 @@ export function registerMessageCommand(program: Command): void {
           throw new KlaudeError('Timeout value must be numeric', 'E_INVALID_TIMEOUT_VALUE');
         }
 
+        // Resolve abbreviated session ID
+        await initializeDatabase();
+        const project = getProjectByHash(context.projectHash);
+        if (!project) {
+          throw new KlaudeError('Project not found', 'E_PROJECT_NOT_FOUND');
+        }
+        const resolvedSessionId = resolveSessionId(sessionId, project.id);
+        closeDatabase();
+
         const response = await sendAgentMessage(instance.socketPath, {
-          sessionId,
+          sessionId: resolvedSessionId,
           prompt,
           waitSeconds: timeoutSeconds,
         });
@@ -57,7 +68,7 @@ export function registerMessageCommand(program: Command): void {
           const config = await loadConfig();
           const logPath = getSessionLogPath(
             context.projectHash,
-            sessionId,
+            resolvedSessionId,
             config.wrapper?.projectsDir,
           );
           const found = await waitForFirstAssistantOutput(logPath, timeoutSeconds);

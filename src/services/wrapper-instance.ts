@@ -32,6 +32,7 @@ import {
   updateSessionProcessPid,
   updateSessionStatus,
 } from '@/db/index.js';
+import { abbreviateSessionId } from '@/utils/cli-helpers.js';
 import { loadConfig } from '@/services/config-loader.js';
 import {
   markInstanceEnded as markRegistryInstanceEnded,
@@ -831,7 +832,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         ...process.env,
         KLAUDE_PROJECT_HASH: context.projectHash,
         KLAUDE_INSTANCE_ID: instanceId,
-        KLAUDE_SESSION_ID: session.id,
+        KLAUDE_SESSION_ID: abbreviateSessionId(session.id),
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -1034,7 +1035,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         ...process.env,
         KLAUDE_PROJECT_HASH: context.projectHash,
         KLAUDE_INSTANCE_ID: instanceId,
-        KLAUDE_SESSION_ID: session.id,
+        KLAUDE_SESSION_ID: abbreviateSessionId(session.id),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -1478,11 +1479,12 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       args.push(...storedFlags.oneTime);
     }
 
+    const abbrevSessionId = abbreviateSessionId(sessionId);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       KLAUDE_PROJECT_HASH: context.projectHash,
       KLAUDE_INSTANCE_ID: instanceId,
-      KLAUDE_SESSION_ID: sessionId,
+      KLAUDE_SESSION_ID: abbrevSessionId,
       KLAUDE_NODE_BIN: process.execPath,
       KLAUDE_NODE_MODULE_VERSION: process.versions.modules,
       KLAUDE_NODE_VERSION: process.version,
@@ -1493,7 +1495,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     debugLog(`[claude-env] Setting environment variables:`);
     debugLog(`  KLAUDE_PROJECT_HASH=${context.projectHash}`);
     debugLog(`  KLAUDE_INSTANCE_ID=${instanceId}`);
-    debugLog(`  KLAUDE_SESSION_ID=${sessionId}`);
+    debugLog(`  KLAUDE_SESSION_ID=${abbrevSessionId}`);
     debugLog(`[claude-spawn] stdin.isTTY=${process.stdin.isTTY}, stdout.isTTY=${process.stdout.isTTY}`);
 
     const sessionLogPath = getSessionLogPath(

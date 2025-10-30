@@ -1,9 +1,11 @@
-import { Command, OptionValues } from 'commander';
-import { prepareProjectContext } from '@/services/project-context.js';
 import { interruptAgent } from '@/services/instance-client.js';
 import { resolveInstanceForProject } from '@/services/instance-selection.js';
-import { KlaudeError, printError } from '@/utils/error-handler.js';
+import { prepareProjectContext } from '@/services/project-context.js';
 import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
+import { KlaudeError, printError } from '@/utils/error-handler.js';
+import { Command, OptionValues } from 'commander';
+import { resolveSessionId } from '@/db/models/session.js';
+import { initializeDatabase, closeDatabase, getProjectByHash } from '@/db/index.js';
 
 /**
  * Register the 'klaude interrupt' command.
@@ -25,8 +27,17 @@ export function registerInterruptCommand(program: Command): void {
           instanceId: options.instance,
         });
 
+        // Resolve abbreviated session ID
+        await initializeDatabase();
+        const project = getProjectByHash(context.projectHash);
+        if (!project) {
+          throw new KlaudeError('Project not found', 'E_PROJECT_NOT_FOUND');
+        }
+        const resolvedSessionId = resolveSessionId(sessionId, project.id);
+        closeDatabase();
+
         const response = await interruptAgent(instance.socketPath, {
-          sessionId,
+          sessionId: resolvedSessionId,
           signal: options.signal,
         });
 

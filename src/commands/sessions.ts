@@ -8,7 +8,7 @@ import {
   listSessionsByProject,
 } from '@/db/index.js';
 import { printError } from '@/utils/error-handler.js';
-import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
+import { resolveProjectDirectory, abbreviateSessionId } from '@/utils/cli-helpers.js';
 
 /**
  * Register the 'klaude sessions' command.
@@ -40,7 +40,7 @@ export function registerSessionsCommand(program: Command): void {
 
           for (const session of sessions) {
             const baseLine = [
-              session.id,
+              abbreviateSessionId(session.id),
               `type=${session.agent_type}`,
               `status=${session.status}`,
               `instance=${session.instance_id ?? 'n/a'}`,

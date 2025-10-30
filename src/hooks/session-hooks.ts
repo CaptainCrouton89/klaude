@@ -9,6 +9,7 @@ import {
   markClaudeSessionEnded,
   updateSessionClaudeLink,
 } from '@/db/index.js';
+import { resolveSessionId } from '@/db/models/session.js';
 import { loadConfig } from '@/services/config-loader.js';
 import { KlaudeError } from '@/utils/error-handler.js';
 import { appendSessionEvent } from '@/utils/logger.js';
@@ -118,9 +119,12 @@ export async function handleSessionStartHook(payload: ClaudeHookPayload): Promis
     }
     await debugLog(`  ✓ Found project: id=${project.id}, root_path=${project.root_path}`);
 
-    // Get session
+    // Get session - resolve abbreviated ID to full ID
     await debugLog('Step 4: Looking up Klaude session...');
-    const session = getSessionById(klaudeSessionId);
+    await debugLog(`  Resolving abbreviated session ID: ${klaudeSessionId}`);
+    const fullSessionId = resolveSessionId(klaudeSessionId, project.id);
+    await debugLog(`  ✓ Resolved to full ID: ${fullSessionId}`);
+    const session = getSessionById(fullSessionId);
     if (!session) {
       throw new KlaudeError(
         `Session ${klaudeSessionId} is not registered`,

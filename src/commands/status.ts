@@ -7,7 +7,8 @@ import {
   initializeDatabase,
 } from '@/db/index.js';
 import { printError } from '@/utils/error-handler.js';
-import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
+import { resolveProjectDirectory, abbreviateSessionId } from '@/utils/cli-helpers.js';
+import { resolveSessionId } from '@/db/models/session.js';
 
 /**
  * Register the 'klaude status' command.
@@ -36,7 +37,17 @@ export function registerStatusCommand(program: Command): void {
           // Query each session
           let hasErrors = false;
           for (const sessionId of sessionIds) {
-            const session = getSessionById(sessionId);
+            // Resolve abbreviated session ID
+            let resolvedSessionId: string;
+            try {
+              resolvedSessionId = resolveSessionId(sessionId, project.id);
+            } catch {
+              console.log(`❌ ${sessionId}: not found`);
+              hasErrors = true;
+              continue;
+            }
+
+            const session = getSessionById(resolvedSessionId);
 
             if (!session) {
               console.log(`❌ ${sessionId}: not found`);
@@ -63,7 +74,7 @@ export function registerStatusCommand(program: Command): void {
             const timeSince = new Date(updatedAt).toLocaleString();
 
             console.log(
-              `${statusIcon} ${sessionId} | agent: ${session.agent_type} | status: ${session.status} | updated: ${timeSince}`
+              `${statusIcon} ${abbreviateSessionId(session.id)} | agent: ${session.agent_type} | status: ${session.status} | updated: ${timeSince}`
             );
           }
 
