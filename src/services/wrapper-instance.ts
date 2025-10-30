@@ -413,14 +413,15 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       projectRoot: context.projectRoot,
     });
 
-    if (!agentDefinition) {
+    // Allow general-purpose agent to have no definition (runs with user prompt as-is)
+    if (!agentDefinition && normalizedAgentType !== 'general-purpose') {
       throw new KlaudeError(
         `Unknown agent type: ${requestedAgentType}`,
         'E_AGENT_TYPE_INVALID',
       );
     }
 
-    const agentType = agentDefinition.type;
+    const agentType = agentDefinition?.type ?? normalizedAgentType;
     const parentSessionId = payload.parentSessionId ?? rootSession.id;
 
     const parentSession = getSessionById(parentSessionId);
