@@ -10,7 +10,10 @@ importers:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.1.28
-        version: 0.1.28(zod@3.25.76)
+        version: 0.1.29(zod@3.25.76)
+      '@r-cli/sdk':
+        specifier: ^1.0.115
+        version: 1.0.115
       better-sqlite3:
         specifier: ^12.4.0
         version: 12.4.1
@@ -38,7 +41,7 @@ importers:
         version: 4.0.9
       '@types/node':
         specifier: ^20.0.0
-        version: 20.19.23
+        version: 20.19.24
       '@types/sql.js':
         specifier: ^1.4.9
         version: 1.4.9
@@ -65,12 +68,12 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.0.0
-        version: 1.6.1(@types/node@20.19.23)(@vitest/ui@1.6.1)
+        version: 1.6.1(@types/node@20.19.24)(@vitest/ui@1.6.1)
 
 packages:
 
-  '@anthropic-ai/claude-agent-sdk@0.1.28':
-    resolution: {integrity: sha512-latceXkaJbtV4mn2kqnbZgTZYlve+dhCGCW2liWhYdUv6KuoUEY6DK1VDzzHGnd2996fIBO/7E5PAAEHpsDing==}
+  '@anthropic-ai/claude-agent-sdk@0.1.29':
+    resolution: {integrity: sha512-VbR2ybPdJHVKAD3pQdruVw8LdXoPbk5J59xU/bQoMNzAsBckHrD2LhupMJrBxLUWxLaPkIUlNKquGBRbkoK84Q==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       zod: ^3.24.1
@@ -327,6 +330,10 @@ packages:
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
 
+  '@r-cli/sdk@1.0.115':
+    resolution: {integrity: sha512-InAVdCSNkQJ1ScZ3GxmMudPpkbckMWuPsM9eo4fq8ZBa3LxQINvV2dzC9k+WhrsAG8j8woK0lrelopHiH2RvIA==}
+    engines: {node: '>=14.0.0'}
+
   '@rollup/rollup-android-arm-eabi@4.52.5':
     resolution: {integrity: sha512-8c1vW4ocv3UOMp9K+gToY5zL2XiiVw3k7f1ksf4yO1FlDFQ1C2u72iACFnSOceJFsWskc2WZNqeRhFRPzv+wtQ==}
     cpu: [arm]
@@ -455,8 +462,8 @@ packages:
   '@types/json-schema@7.0.15':
     resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
 
-  '@types/node@20.19.23':
-    resolution: {integrity: sha512-yIdlVVVHXpmqRhtyovZAcSy0MiPcYWGkoO4CGe/+jpP0hmNuihm4XhHbADpK++MsiLHP5MVlv+bcgdF99kSiFQ==}
+  '@types/node@20.19.24':
+    resolution: {integrity: sha512-FE5u0ezmi6y9OZEzlJfg37mqqf6ZDSF2V/NLjUyGrR9uTZ7Sb9F7bLNZ03S4XVUNRWGA7Ck4c1kK+YnuWjl+DA==}
 
   '@types/semver@7.7.1':
     resolution: {integrity: sha512-FmgJfu+MOcQ370SD0ev7EI8TlCAfKYU+B4m5T3yXc1CiRN94g/SZPtsCkk506aUDtlMnFZvasDwHHUcZUEaYuA==}
@@ -1041,8 +1048,8 @@ packages:
   natural-compare@1.4.0:
     resolution: {integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==}
 
-  node-abi@3.78.0:
-    resolution: {integrity: sha512-E2wEyrgX/CqvicaQYU3Ze1PFGjc4QYPGsjUrlYkqAE0WjHEZwgOsGMPMzkMse4LjJbDmaEuDX3CM036j5K2DSQ==}
+  node-abi@3.79.0:
+    resolution: {integrity: sha512-Pr/5KdBQGG8TirdkS0qN3B+f3eo8zTOfZQWAxHoJqopMz2/uvRnG+S4fWu/6AZxKei2CP2p/psdQ5HFC2Ap5BA==}
     engines: {node: '>=10'}
 
   normalize-path@3.0.0:
@@ -1453,7 +1460,7 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/claude-agent-sdk@0.1.28(zod@3.25.76)':
+  '@anthropic-ai/claude-agent-sdk@0.1.29(zod@3.25.76)':
     dependencies:
       zod: 3.25.76
     optionalDependencies:
@@ -1631,6 +1638,8 @@ snapshots:
 
   '@polka/url@1.0.0-next.29': {}
 
+  '@r-cli/sdk@1.0.115': {}
+
   '@rollup/rollup-android-arm-eabi@4.52.5':
     optional: true
 
@@ -1701,7 +1710,7 @@ snapshots:
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
-      '@types/node': 20.19.23
+      '@types/node': 20.19.24
 
   '@types/emscripten@1.41.5': {}
 
@@ -1711,7 +1720,7 @@ snapshots:
 
   '@types/json-schema@7.0.15': {}
 
-  '@types/node@20.19.23':
+  '@types/node@20.19.24':
     dependencies:
       undici-types: 6.21.0
 
@@ -1720,7 +1729,7 @@ snapshots:
   '@types/sql.js@1.4.9':
     dependencies:
       '@types/emscripten': 1.41.5
-      '@types/node': 20.19.23
+      '@types/node': 20.19.24
 
   '@typescript-eslint/eslint-plugin@6.21.0(@typescript-eslint/parser@6.21.0(eslint@8.57.1)(typescript@5.9.3))(eslint@8.57.1)(typescript@5.9.3)':
     dependencies:
@@ -1841,7 +1850,7 @@ snapshots:
       pathe: 1.1.2
       picocolors: 1.1.1
       sirv: 2.0.4
-      vitest: 1.6.1(@types/node@20.19.23)(@vitest/ui@1.6.1)
+      vitest: 1.6.1(@types/node@20.19.24)(@vitest/ui@1.6.1)
 
   '@vitest/utils@1.6.1':
     dependencies:
@@ -2367,7 +2376,7 @@ snapshots:
 
   natural-compare@1.4.0: {}
 
-  node-abi@3.78.0:
+  node-abi@3.79.0:
     dependencies:
       semver: 7.7.3
 
@@ -2454,7 +2463,7 @@ snapshots:
       minimist: 1.2.8
       mkdirp-classic: 0.5.3
       napi-build-utils: 2.0.0
-      node-abi: 3.78.0
+      node-abi: 3.79.0
       pump: 3.0.3
       rc: 1.2.8
       simple-get: 4.0.1
@@ -2692,13 +2701,13 @@ snapshots:
 
   util-deprecate@1.0.2: {}
 
-  vite-node@1.6.1(@types/node@20.19.23):
+  vite-node@1.6.1(@types/node@20.19.24):
     dependencies:
       cac: 6.7.14
       debug: 4.4.3
       pathe: 1.1.2
       picocolors: 1.1.1
-      vite: 5.4.21(@types/node@20.19.23)
+      vite: 5.4.21(@types/node@20.19.24)
     transitivePeerDependencies:
       - '@types/node'
       - less
@@ -2710,16 +2719,16 @@ snapshots:
       - supports-color
       - terser
 
-  vite@5.4.21(@types/node@20.19.23):
+  vite@5.4.21(@types/node@20.19.24):
     dependencies:
       esbuild: 0.21.5
       postcss: 8.5.6
       rollup: 4.52.5
     optionalDependencies:
-      '@types/node': 20.19.23
+      '@types/node': 20.19.24
       fsevents: 2.3.3
 
-  vitest@1.6.1(@types/node@20.19.23)(@vitest/ui@1.6.1):
+  vitest@1.6.1(@types/node@20.19.24)(@vitest/ui@1.6.1):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -2738,11 +2747,11 @@ snapshots:
       strip-literal: 2.1.1
       tinybench: 2.9.0
       tinypool: 0.8.4
-      vite: 5.4.21(@types/node@20.19.23)
-      vite-node: 1.6.1(@types/node@20.19.23)
+      vite: 5.4.21(@types/node@20.19.24)
+      vite-node: 1.6.1(@types/node@20.19.24)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@types/node': 20.19.23
+      '@types/node': 20.19.24
       '@vitest/ui': 1.6.1(vitest@1.6.1)
     transitivePeerDependencies:
       - less

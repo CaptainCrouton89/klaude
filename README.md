@@ -2,6 +2,26 @@
 
 A wrapper that spawns Claude Code as a subprocess and manages multiple agent sessions with seamless context switching. Enables delegating work to specialized agents while maintaining stateful session history. Klaude now tracks Claude Code's native session identifiers so `--resume` always targets the correct conversation.
 
+## Installation
+
+```bash
+npm install
+npm run build
+npm link
+```
+
+**Note for pnpm users:** `better-sqlite3` requires native compilation. If you get a "Could not locate the bindings file" error, you need to manually build it:
+
+```bash
+cd node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3
+npm run build-release
+```
+
+Alternatively, configure pnpm to allow build scripts in `.npmrc`:
+```
+enable-pre-post-scripts=true
+```
+
 ## Quick Start
 
 ```bash

@@ -5,11 +5,8 @@
  * via the local CLI SDK, and streams structured events back to the wrapper over stdout.
  */
 
-import { homedir } from 'node:os';
-import path from 'node:path';
 import { exit, stderr, stdin, stdout } from 'node:process';
 import readline from 'node:readline';
-import { pathToFileURL } from 'node:url';
 
 import type {
   HookInput,
@@ -21,6 +18,7 @@ import type {
   SDKPartialAssistantMessage,
   SDKResultMessage
 } from '@anthropic-ai/claude-agent-sdk';
+import { query } from '@r-cli/sdk'; // fork of the sdk that uses your own auth token
 import type { McpServerConfig } from '../types/index.js';
 
 type PermissionMode = QueryOptions['permissionMode'];
@@ -101,10 +99,6 @@ async function readRuntimeConfig(): Promise<RuntimeInitPayload> {
   });
 }
 
-function expandClaudeQueryPath(): string {
-  const claudeCliPath = path.join(homedir(), '.claude', 'claude-cli', 'sdk.mjs');
-  return pathToFileURL(claudeCliPath).href;
-}
 
 function extractAssistantText(message: SDKAssistantMessage): string | null {
   const content = (message.message as { content?: unknown }).content;
@@ -284,12 +278,6 @@ async function run(): Promise<void> {
     throw new Error('Agent prompt is required');
   }
 
-  const queryModule = await import(expandClaudeQueryPath());
-  const queryFn = queryModule.query as (params: {
-    prompt: string | AsyncIterable<SDKMessage>;
-    options?: QueryOptions;
-  }) => Query;
-
   const abortController = new AbortController();
   const options = await buildQueryOptions(init, abortController);
 
@@ -318,7 +306,7 @@ async function run(): Promise<void> {
   let stream: Query;
   try {
     // Use string prompt initially; messages will be handled separately
-    stream = queryFn({
+    stream = query({
       prompt: init.prompt,
       options,
     });
@@ -386,7 +374,7 @@ async function run(): Promise<void> {
 
           try {
             // Continue the exact same Claude session using explicit resume
-            const continuedStream = queryFn({
+            const continuedStream = query({
               prompt: parsed.prompt,
               options: {
                 ...options,
