@@ -1,6 +1,6 @@
 {
   "name": "klaude",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript CLI wrapper for Claude Agent SDK with multi-agent session management",
   "type": "module",
   "main": "dist/index.js",
@@ -24,8 +24,22 @@
     "cli",
     "sdk"
   ],
-  "author": "",
+  "author": "Silas Rhyneer <silas@rhyneerconsulting.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CaptainCrouton89/klaude.git"
+  },
+  "homepage": "https://github.com/CaptainCrouton89/klaude#readme",
+  "bugs": {
+    "url": "https://github.com/CaptainCrouton89/klaude/issues"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json",
+    "LICENSE"
+  ],
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.28",
     "@r-cli/sdk": "^1.1.115",

@@ -9,10 +9,10 @@ import { printError } from '@/utils/error-handler.js';
 export function registerSetupHooksCommand(program: Command): void {
   program
     .command('setup-hooks')
-    .description('Install Klaude hooks to ~/.claude/settings.json')
+    .description('Install Klaude hooks to ~/.claude/settings.json and optionally set up built-in agents')
     .action(async () => {
       try {
-        setupHooks();
+        await setupHooks();
       } catch (error) {
         printError(error);
         process.exitCode = process.exitCode ?? 1;
