@@ -23,10 +23,22 @@ import type { McpServerConfig } from '../types/index.js';
 
 type PermissionMode = QueryOptions['permissionMode'];
 
+/**
+ * Extended QueryOptions to include output_style parameter.
+ * This may be a newer SDK feature not yet included in the type definitions.
+ */
+interface ExtendedQueryOptions extends QueryOptions {
+  output_style?: string;
+}
+
 interface RuntimeInitPayload {
   sessionId: string;
   agentType: string;
   prompt: string;
+  /**
+   * Agent instructions to be passed as output_style parameter to SDK
+   */
+  outputStyle?: string | null;
   options?: {
     checkout?: boolean;
     share?: boolean;
@@ -203,11 +215,11 @@ Available options:
 async function buildQueryOptions(
   init: RuntimeInitPayload,
   abortController: AbortController,
-): Promise<QueryOptions> {
+): Promise<ExtendedQueryOptions> {
   // Klaude agents run in bypassPermissions mode by default
   const permissionMode: PermissionMode = init.sdk?.permissionMode ? init.sdk.permissionMode : 'bypassPermissions';
 
-  const options: QueryOptions = {
+  const options: ExtendedQueryOptions = {
     abortController,
     includePartialMessages: true,
     permissionMode,
@@ -272,14 +284,23 @@ async function buildQueryOptions(
     }
   }
 
+  // Add agent instructions as output_style if provided
+  if (init.outputStyle && init.outputStyle.trim().length > 0) {
+    options.output_style = init.outputStyle;
+  }
+
   return options;
 }
 
 async function run(): Promise<void> {
   const init = await readRuntimeConfig();
 
-  if (!init.prompt || init.prompt.trim().length === 0) {
-    throw new Error('Agent prompt is required');
+  // Either prompt or outputStyle is required
+  const hasPrompt = init.prompt && init.prompt.trim().length > 0;
+  const hasOutputStyle = init.outputStyle && init.outputStyle.trim().length > 0;
+
+  if (!hasPrompt && !hasOutputStyle) {
+    throw new Error('Either prompt or outputStyle must be provided');
   }
 
   const abortController = new AbortController();
