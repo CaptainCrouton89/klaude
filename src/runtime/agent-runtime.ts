@@ -254,17 +254,29 @@ async function blockTaskToolHook(
 
   // Block Task tool usage
   if (input.tool_name === 'Task') {
+    // Extract parameters to provide specific command example
+    const toolInput = input.tool_input as { subagent_type?: string; prompt?: string } | undefined;
+
+    if (!toolInput || !toolInput.subagent_type || !toolInput.prompt) {
+      throw new Error(
+        `Task tool input is required: subagent_type and prompt are required. Passed input: ${JSON.stringify(input)}`
+      );
+    }
+
+    const agentType = toolInput.subagent_type;
+    const promptPreview = toolInput.prompt.slice(0, 10);
+
     return {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: `ERROR: The Task tool is replaced with \`klaude start <agent_type> <prompt> [options]\`. You MUST re-delegate this task, but use the klaude instead.
+        permissionDecisionReason: `ERROR: The Task tool is replaced with \`klaude start ${agentType} "${promptPreview}..." [options]\`. You MUST re-delegate this task, but use klaude instead.
 
 To spawn an agent, use:
-  klaude start <agent_type> <prompt> [options]
+  klaude start ${agentType} "${promptPreview}..." [options]
 
 Available options:
-  --attach    Attach to agent in foreground (blocks until complete). Do  this when the task is a dependency for a known next step.
+  --attach    Attach to agent in foreground (blocks until complete). Do this when the task is a dependency for a known next step.
   --detach    Run agent in background (default).`,
       },
     };

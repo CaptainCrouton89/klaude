@@ -160,17 +160,30 @@ export function registerHookCommand(program: Command): void {
         const toolName = (payload as { tool_name?: string }).tool_name;
 
         if (toolName === 'Task') {
+          // Extract agent_type and prompt from tool input
+          const payloadWithToolInput = payload as { tool_input?: { subagent_type?: string; prompt?: string; description?: string } };
+          const toolInput = payloadWithToolInput.tool_input;
+
+          if (!toolInput || !toolInput.subagent_type || !toolInput.prompt) {
+            throw new Error(
+              `Task tool input is required: subagent_type and prompt are required. Passed payload: ${JSON.stringify(payload)}`
+            );
+          }
+
+          const agentType = toolInput.subagent_type;
+          const promptPreview = toolInput.prompt.slice(0, 10);
+
           const response = {
             hookSpecificOutput: {
               hookEventName: "PreToolUse",
               permissionDecision: "deny",
-              permissionDecisionReason: `ERROR: The Task tool is replaced with \`klaude start <agent_type> <prompt> [options]\`. You MUST re-delegate this task, but use the klaude instead.
+              permissionDecisionReason: `ERROR: The Task tool is replaced with \`klaude start ${agentType} "${promptPreview}..." [options]\`. You MUST re-delegate this task, but use klaude instead.
 
 To spawn an agent, use:
-  klaude start <agent_type> <prompt> [options]
+  klaude start ${agentType} "${promptPreview}..." [options]
 
 Available options:
-  --attach    Attach to agent in foreground (blocks until complete). Do  this when the task is a dependency for a known next step.
+  --attach    Attach to agent in foreground (blocks until complete). Do this when the task is a dependency for a known next step.
   --detach    Run agent in background (default).`
             },
           };

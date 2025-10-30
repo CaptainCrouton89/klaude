@@ -1,10 +1,10 @@
-import { Command, OptionValues } from 'commander';
-import { prepareProjectContext } from '@/services/project-context.js';
-import { startAgentSession, requestCheckout } from '@/services/instance-client.js';
+import { requestCheckout, startAgentSession } from '@/services/instance-client.js';
 import { resolveInstanceForProject } from '@/services/instance-selection.js';
-import { KlaudeError, printError } from '@/utils/error-handler.js';
-import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
+import { prepareProjectContext } from '@/services/project-context.js';
 import { tailSessionLog } from '@/services/session-log.js';
+import { resolveProjectDirectory } from '@/utils/cli-helpers.js';
+import { KlaudeError, printError } from '@/utils/error-handler.js';
+import { Command, OptionValues } from 'commander';
 
 /**
  * Register the 'klaude start' command.
@@ -113,9 +113,8 @@ export function registerStartCommand(program: Command): void {
           // Print session metadata after completion for easy reference
           if (!options.verbose) {
             console.log(`\nsession: ${result.sessionId}`);
-            console.log(`  - Check out:     klaude checkout ${result.sessionId}`);
-            console.log(`  - Send message:  klaude message ${result.sessionId} "<prompt>"`);
-            console.log(`  - View logs:     klaude logs ${result.sessionId}`);
+            console.log(`  - Check out:               klaude checkout ${result.sessionId}`);
+            console.log(`  - Send follow-up message:  klaude message ${result.sessionId} "<prompt>"`);
           }
         }
       } catch (error) {
