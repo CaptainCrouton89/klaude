@@ -282,6 +282,7 @@ interface AgentRuntimeState {
   status: 'pending' | 'running' | 'done' | 'failed' | 'interrupted';
   logPath: string;
   detached: boolean;
+  runtimeKind: 'claude' | 'cursor';
 }
 
 export async function startWrapperInstance(options: WrapperStartOptions = {}): Promise<void> {
@@ -380,6 +381,21 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
   });
 
   const normalizeAgentType = (agentType: string): string => agentType.trim().toLowerCase();
+
+  const determineRuntimeKind = (definition: AgentDefinition | null): 'claude' | 'cursor' => {
+    const modelValue = definition?.model;
+    if (!modelValue) {
+      return 'claude';
+    }
+    const normalized = modelValue.replace(/\s+/g, '').toLowerCase();
+    if (normalized.includes('sonnet') || normalized === 'sonnet') {
+      return 'claude';
+    }
+    if (normalized.includes('haiku') || normalized === 'haiku') {
+      return 'claude';
+    }
+    return 'cursor';
+  };
 
   const handleStartAgent = async (
     payload: StartAgentRequestPayload,
@@ -522,6 +538,8 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       }
     }
 
+    const runtimeKind = determineRuntimeKind(agentDefinition);
+
     const metadata = {
       agentType,
       prompt: payload.prompt,
@@ -529,6 +547,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       instanceId,
       agentCount: payload.agentCount ?? null,
       options: payload.options ?? {},
+      runtimeKind,
       definition: agentDefinition
         ? {
             name: agentDefinition.name,
@@ -571,6 +590,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       definitionSourcePath: agentDefinition?.sourcePath ?? null,
       allowedAgents: agentDefinition?.allowedAgents ?? [],
       definitionScope: agentDefinition?.scope ?? null,
+      runtimeKind,
     };
 
     try {
@@ -613,13 +633,22 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       ? composeAgentPrompt(agentDefinition, payload.prompt)
       : payload.prompt;
 
-    await startAgentRuntimeProcess(
-      session,
-      agentType,
-      { ...payload, prompt: composedPrompt },
-      shareResumeId,
-      agentDefinition ?? null,
-    );
+    if (runtimeKind === 'claude') {
+      await startAgentRuntimeProcess(
+        session,
+        agentType,
+        { ...payload, prompt: composedPrompt },
+        shareResumeId,
+        agentDefinition ?? null,
+      );
+    } else {
+      await startCursorAgentProcess(
+        session,
+        agentType,
+        { ...payload, prompt: composedPrompt },
+        agentDefinition ?? null,
+      );
+    }
 
     return {
       sessionId: session.id,
@@ -629,6 +658,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       prompt: session.prompt ?? payload.prompt,
       createdAt: session.created_at,
       instanceId,
+      runtimeKind,
     };
   };
 
@@ -813,6 +843,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       status: 'pending',
       logPath: sessionLogPath,
       detached: Boolean(payload.options?.detach),
+      runtimeKind: 'claude',
     };
 
     agentRuntimes.set(session.id, runtimeState);
@@ -836,6 +867,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         agentType,
         definitionName: agentDefinition?.name ?? null,
         definitionScope: agentDefinition?.scope ?? null,
+        runtimeKind: runtimeState.runtimeKind,
       });
     });
 
@@ -958,6 +990,294 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         console.error(`[runtime-stdin-record-failed] ${recordMsg}`);
       }
     }
+  }
+
+  async function startCursorAgentProcess(
+    session: ReturnType<typeof createSession>,
+    agentType: string,
+    payload: StartAgentRequestPayload,
+    agentDefinition: AgentDefinition | null = null,
+  ): Promise<void> {
+    debugLog(`[cursor-runtime-start] sessionId=${session.id}, agentType=${agentType}`);
+
+    const sessionLogPath = getSessionLogPath(
+      context.projectHash,
+      session.id,
+      wrapperConfig.projectsDir,
+    );
+
+    const cursorArgs = ['-p', '--output-format', 'stream-json'];
+    const modelOverride = agentDefinition?.model;
+    if (modelOverride && modelOverride.trim().length > 0) {
+      cursorArgs.push('--model', modelOverride);
+    }
+    cursorArgs.push('--');
+    cursorArgs.push(payload.prompt);
+
+    const child = spawn('cursor-agent', cursorArgs, {
+      cwd: context.projectRoot,
+      env: {
+        ...process.env,
+        KLAUDE_PROJECT_HASH: context.projectHash,
+        KLAUDE_INSTANCE_ID: instanceId,
+        KLAUDE_SESSION_ID: session.id,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    const runtimeState: AgentRuntimeState = {
+      sessionId: session.id,
+      process: child,
+      runtimeProcessId: null,
+      status: 'pending',
+      logPath: sessionLogPath,
+      detached: Boolean(payload.options?.detach),
+      runtimeKind: 'cursor',
+    };
+
+    agentRuntimes.set(session.id, runtimeState);
+    debugLog(`[cursor-runtime-tracked] sessionId=${session.id}`);
+
+    const forwardRuntimeEvent = (event: AgentRuntimeEvent): void => {
+      void handleAgentRuntimeEvent(session.id, event, runtimeState);
+    };
+
+    forwardRuntimeEvent({
+      type: 'status',
+      status: 'starting',
+      detail: 'Launching cursor-agent runtime',
+    });
+
+    child.once('spawn', async () => {
+      if (!child.pid) {
+        debugLog(`[cursor-runtime-spawn-no-pid] sessionId=${session.id}`);
+        return;
+      }
+      debugLog(`[cursor-runtime-spawned] sessionId=${session.id}, pid=${child.pid}`);
+      const runtimeProcess = createRuntimeProcess(session.id, child.pid, 'cursor', true);
+      runtimeState.runtimeProcessId = runtimeProcess.id;
+      updateSessionProcessPid(session.id, child.pid);
+      updateSessionStatus(session.id, 'running');
+      runtimeState.status = 'running';
+
+      await recordSessionEvent(session.id, 'agent.runtime.spawned', {
+        pid: child.pid,
+        detached: runtimeState.detached,
+        agentType,
+        definitionName: agentDefinition?.name ?? null,
+        definitionScope: agentDefinition?.scope ?? null,
+        runtimeKind: runtimeState.runtimeKind,
+      });
+    });
+
+    child.once('error', async (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      debugLog(`[cursor-runtime-error] sessionId=${session.id}, error=${message}`);
+      try {
+        await recordSessionEvent(session.id, 'agent.runtime.process.error', {
+          message,
+          runtime: 'cursor',
+        });
+      } catch (recordError) {
+        const recordMsg = recordError instanceof Error ? recordError.message : String(recordError);
+        console.error(`[cursor-runtime-error-record-failed] ${recordMsg}`);
+      }
+      updateSessionStatus(session.id, 'failed');
+      markSessionEnded(session.id, 'failed');
+      runtimeState.status = 'failed';
+    });
+
+    function extractCursorText(event: Record<string, unknown>): string | null {
+      const message = event.message;
+      if (message && typeof message === 'object') {
+        const content = (message as { content?: unknown }).content;
+        if (Array.isArray(content)) {
+          const parts: string[] = [];
+          for (const item of content) {
+            if (!item || typeof item !== 'object') {
+              continue;
+            }
+            const text = (item as { text?: unknown }).text;
+            if (typeof text === 'string' && text.length > 0) {
+              parts.push(text);
+            }
+          }
+          if (parts.length > 0) {
+            return parts.join('');
+          }
+        }
+      }
+
+      const delta = event.delta;
+      if (delta && typeof delta === 'object') {
+        const text = (delta as { text?: unknown }).text;
+        if (typeof text === 'string' && text.length > 0) {
+          return text;
+        }
+      }
+
+      return null;
+    }
+
+    function mapCursorEvent(rawEvent: unknown): AgentRuntimeEvent[] {
+      if (!rawEvent || typeof rawEvent !== 'object') {
+        return [];
+      }
+      const event = rawEvent as Record<string, unknown>;
+      const type = typeof event.type === 'string' ? event.type : 'unknown';
+      const subtype = typeof event.subtype === 'string' ? event.subtype : null;
+      const events: AgentRuntimeEvent[] = [];
+
+      switch (type) {
+        case 'system': {
+          const model = typeof event.model === 'string' ? event.model : null;
+          const detail = model
+            ? `cursor-agent system.${subtype ?? 'event'} (model=${model})`
+            : `cursor-agent system.${subtype ?? 'event'}`;
+          events.push({ type: 'log', level: 'info', message: detail });
+          if (subtype === 'init') {
+            events.push({
+              type: 'status',
+              status: 'running',
+              detail: model ? `Cursor agent using ${model}` : 'Cursor agent ready',
+            });
+          }
+          break;
+        }
+        case 'assistant':
+        case 'assistant_partial': {
+          const text = extractCursorText(event);
+          const messageType = subtype ? `assistant.${subtype}` : 'assistant';
+          events.push({
+            type: 'message',
+            messageType,
+            payload: rawEvent,
+            text,
+          });
+          break;
+        }
+        case 'tool_call':
+        case 'tool_result': {
+          const messageType = subtype ? `${type}.${subtype}` : type;
+          events.push({
+            type: 'message',
+            messageType,
+            payload: rawEvent,
+          });
+          break;
+        }
+        case 'result': {
+          const stopReason =
+            typeof event.stopReason === 'string' ? event.stopReason : null;
+          events.push({
+            type: 'result',
+            result: rawEvent,
+            stopReason,
+          });
+          break;
+        }
+        case 'error': {
+          const errorMessage =
+            typeof event.message === 'string'
+              ? event.message
+              : 'Cursor agent reported an error';
+          events.push({
+            type: 'error',
+            message: errorMessage,
+            stack: typeof event.stack === 'string' ? event.stack : undefined,
+          });
+          break;
+        }
+        default: {
+          events.push({
+            type: 'message',
+            messageType: `cursor.${type}`,
+            payload: rawEvent,
+          });
+        }
+      }
+
+      return events;
+    }
+
+    child.stdout?.setEncoding('utf8');
+    let stdoutBuffer = '';
+    child.stdout?.on('data', (chunk: string) => {
+      stdoutBuffer += chunk;
+      let newlineIndex = stdoutBuffer.indexOf('\n');
+      while (newlineIndex >= 0) {
+        const line = stdoutBuffer.slice(0, newlineIndex).trim();
+        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+        if (line.length > 0) {
+          try {
+            const parsed = JSON.parse(line) as unknown;
+            const events = mapCursorEvent(parsed);
+            if (events.length === 0) {
+              void recordSessionEvent(session.id, 'agent.runtime.event.unknown', parsed);
+            } else {
+              for (const event of events) {
+                forwardRuntimeEvent(event);
+              }
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            void recordSessionEvent(session.id, 'agent.runtime.event.parse_error', {
+              line,
+              message,
+              source: 'cursor-agent',
+            });
+          }
+        }
+        newlineIndex = stdoutBuffer.indexOf('\n');
+      }
+    });
+
+    child.stdout?.on('end', () => {
+      const remaining = stdoutBuffer.trim();
+      if (remaining.length > 0) {
+        void recordSessionEvent(session.id, 'agent.runtime.stdout.trailing', {
+          data: remaining,
+        });
+      }
+      stdoutBuffer = '';
+    });
+
+    child.stderr?.setEncoding('utf8');
+    let stderrBuffer = '';
+    child.stderr?.on('data', (chunk: string) => {
+      stderrBuffer += chunk;
+      let newlineIndex = stderrBuffer.indexOf('\n');
+      while (newlineIndex >= 0) {
+        const line = stderrBuffer.slice(0, newlineIndex);
+        stderrBuffer = stderrBuffer.slice(newlineIndex + 1);
+        const data = line.trim();
+        if (data.length > 0) {
+          void recordSessionEvent(session.id, 'agent.runtime.stderr', {
+            data,
+            runtime: 'cursor',
+          });
+        }
+        newlineIndex = stderrBuffer.indexOf('\n');
+      }
+    });
+
+    child.stderr?.on('end', () => {
+      const remaining = stderrBuffer.trim();
+      if (remaining.length > 0) {
+        void recordSessionEvent(session.id, 'agent.runtime.stderr', {
+          data: remaining,
+          runtime: 'cursor',
+        });
+      }
+      stderrBuffer = '';
+    });
+
+    child.once('exit', (code, signal) => {
+      const exitInfo: ClaudeExitResult = { code, signal };
+      void handleAgentRuntimeExit(session.id, exitInfo, runtimeState).finally(() => {
+        agentRuntimes.delete(session.id);
+      });
+    });
   }
   async function waitForClaudeSessionId(
     sessionId: string,
@@ -1333,6 +1653,13 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       ? Math.max(0, payload.waitSeconds)
       : 5;
 
+    if (runtime && runtime.runtimeKind !== 'claude') {
+      throw new KlaudeError(
+        'Cursor-backed sessions do not support messaging; start a new run instead',
+        'E_AGENT_MESSAGE_UNSUPPORTED',
+      );
+    }
+
     // If no runtime is active, attempt to start one resuming the prior Claude session
     if (!runtime) {
       const session = getSessionById(payload.sessionId);
@@ -1349,15 +1676,23 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       // Derive the agent type label (stored in session metadata when created)
       let derivedAgentType = 'sdk';
       let storedAgentDefinition: AgentDefinition | null = null;
+      let runtimeKind: 'claude' | 'cursor' = 'claude';
       try {
         if (session.metadata_json) {
           const meta = JSON.parse(session.metadata_json) as {
             agentType?: string;
             definition?: unknown;
+            runtimeKind?: string;
           };
           if (meta && typeof meta.agentType === 'string' && meta.agentType.trim().length > 0) {
             derivedAgentType = meta.agentType;
           }
+           if (meta && typeof meta.runtimeKind === 'string') {
+             const normalized = meta.runtimeKind.toLowerCase() as 'claude' | 'cursor';
+             if (normalized === 'cursor') {
+               runtimeKind = 'cursor';
+             }
+           }
 
           const storedDefinitionRaw = meta?.definition;
           if (storedDefinitionRaw && typeof storedDefinitionRaw === 'object') {
@@ -1404,6 +1739,13 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         }
       } catch {
         // ignore metadata parse errors; fallback to 'sdk'
+      }
+
+      if (runtimeKind !== 'claude') {
+        throw new KlaudeError(
+          'Cursor-backed sessions do not support messaging; start a new run instead',
+          'E_AGENT_MESSAGE_UNSUPPORTED',
+        );
       }
 
       // Prefer most recent active Claude session link, else latest link, else session.last_claude_session_id.
@@ -1469,6 +1811,13 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         status: 'queued',
         messagesQueued: 1,
       };
+    }
+
+    if (runtime.runtimeKind !== 'claude') {
+      throw new KlaudeError(
+        'Cursor-backed sessions do not support messaging; start a new run instead',
+        'E_AGENT_MESSAGE_UNSUPPORTED',
+      );
     }
 
     if (!runtime.process.stdin) {

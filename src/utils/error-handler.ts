@@ -54,6 +54,7 @@ function getSuggestion(code: string): string | null {
     E_SESSION_NOT_FOUND: "Run 'klaude sessions' to list available sessions",
     AGENT_NOT_FOUND: "Run 'klaude sessions' to list available sessions",
     E_AGENT_NOT_RUNNING: "Run 'klaude sessions' to check agent status",
+    E_AGENT_MESSAGE_UNSUPPORTED: "Start a new session for Cursor-backed agents instead",
     E_SWITCH_TARGET_MISSING: "Specify a target session ID or run from within a Claude session",
     E_INSTANCE_NOT_FOUND: "Run 'klaude instances' to see available instances",
     E_INVALID_FLAGS: "Run the command with '--help' to see valid flag combinations",

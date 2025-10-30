@@ -55,6 +55,7 @@ export function registerStartCommand(program: Command): void {
         }
 
         const result = response.result;
+        const runtimeKind = result.runtimeKind ?? 'claude';
 
         if (options.verbose) {
           console.log(`Started agent session ${result.sessionId} (${result.agentType})`);
@@ -70,12 +71,25 @@ export function registerStartCommand(program: Command): void {
           console.log(`  - Tail output:   klaude logs ${result.sessionId} -f`);
           console.log(`  - Check status:  klaude status ${result.sessionId}`);
           console.log(`  - Wait for done: klaude wait ${result.sessionId}`);
-          console.log(`  - Enter TUI:     klaude checkout ${result.sessionId}`);
-          console.log(`  - Message:       klaude message ${result.sessionId} "<prompt>" --timeout 5`);
+          if (runtimeKind === 'claude') {
+            console.log(`  - Enter TUI:     klaude checkout ${result.sessionId}`);
+            console.log(`  - Message:       klaude message ${result.sessionId} "<prompt>" --timeout 5`);
+          } else {
+            console.log(`  - Rerun prompt:  klaude start ${result.agentType} "<prompt>"`);
+          }
           console.log(`  - Interrupt:     klaude interrupt ${result.sessionId}`);
+          if (runtimeKind === 'cursor') {
+            console.log('Note: Cursor sessions do not support checkout or message flows.');
+          }
         }
 
-        if (payload.options?.checkout) {
+        const requestedCheckout = Boolean(payload.options?.checkout);
+        const checkoutSupported = runtimeKind === 'claude';
+        let checkoutPerformed = false;
+
+        if (requestedCheckout && !checkoutSupported) {
+          console.log('Checkout is not supported for cursor-backed agents; ignoring --checkout.');
+        } else if (requestedCheckout) {
           const checkoutResponse = await requestCheckout(instance.socketPath, {
             sessionId: result.sessionId,
             waitSeconds: 5,
@@ -84,6 +98,7 @@ export function registerStartCommand(program: Command): void {
             throw new KlaudeError(checkoutResponse.error.message, checkoutResponse.error.code);
           }
           const checkoutResult = checkoutResponse.result;
+          checkoutPerformed = true;
           if (options.verbose) {
             console.log(
               `Checkout activated for session ${checkoutResult.sessionId} (resume ${checkoutResult.claudeSessionId}).`,
@@ -93,7 +108,7 @@ export function registerStartCommand(program: Command): void {
           }
         }
         // Attach only if explicitly requested
-        if (options.attach && !payload.options?.checkout) {
+        if (options.attach && !checkoutPerformed) {
           await tailSessionLog(result.logPath, { untilExit: true, raw: Boolean(options.verbose) });
         }
       } catch (error) {

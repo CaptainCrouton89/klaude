@@ -30,6 +30,7 @@ export interface StartAgentResponsePayload {
   prompt: string;
   createdAt: string;
   instanceId: string;
+  runtimeKind?: 'claude' | 'cursor';
 }
 
 export interface CheckoutRequestPayload {
