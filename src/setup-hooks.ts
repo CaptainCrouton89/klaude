@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as os from 'node:os';
+import * as path from 'node:path';
 
 const SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
 
@@ -24,28 +24,31 @@ interface Settings {
 const KLAUDE_HOOKS: Record<string, Hook[]> = {
   PreToolUse: [
     {
-      matcher: 'Task',
-      hooks: [{ type: 'command', command: 'klaude hook task' }],
+      matcher: "Task",
+      hooks: [{ type: "command", command: "klaude hook task" }],
     },
   ],
-  PreUserMessage: [
+  UserPromptSubmit: [
     {
-      hooks: [{ type: 'command', command: 'klaude hook pre-user-message' }],
+      hooks: [{ type: "command", command: "klaude hook pre-user-message" }],
     },
   ],
   SessionStart: [
     {
-      matcher: 'startup',
-      hooks: [{ type: 'command', command: 'klaude hook session-start' }],
+      hooks: [{ type: "command", command: "klaude hook session-start" }],
     },
     {
-      matcher: 'resume',
-      hooks: [{ type: 'command', command: 'klaude hook session-start' }],
+      matcher: "startup",
+      hooks: [{ type: "command", command: "klaude hook session-start" }],
+    },
+    {
+      matcher: "resume",
+      hooks: [{ type: "command", command: "klaude hook session-start" }],
     },
   ],
   SessionEnd: [
     {
-      hooks: [{ type: 'command', command: 'klaude hook session-end' }],
+      hooks: [{ type: "command", command: "klaude hook session-end" }],
     },
   ],
 };
