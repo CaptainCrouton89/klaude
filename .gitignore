@@ -4,3 +4,4 @@ dist
 tmp/
 docs/investigations/
 UX_GAP_ANALYSIS.md
+.mcp.json
