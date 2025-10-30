@@ -4,10 +4,44 @@ A wrapper that spawns Claude Code as a subprocess and manages multiple agent ses
 
 ## Installation
 
+### Global Install (Recommended)
+
+```bash
+npm install -g klaude
+```
+
+This installs `klaude` globally, making it available as a command from any directory.
+
+**After installation, run the setup command:**
+
+```bash
+klaude setup-hooks
+```
+
+This installs git hooks into your `~/.claude/settings.json` that enable session management and context switching. This is required for multi-agent workflows to function properly.
+
+During setup, you'll be prompted to install built-in agents. These example agents include:
+- **programmer** – Complex multi-file implementations requiring pattern analysis
+- **junior-engineer** – Focused implementation of well-specified tasks
+- **context-engineer** – Codebase exploration and pattern discovery
+- **senior-architect** – Technical review and architectural guidance
+
+The built-in agents are optional and will be copied to `~/.claude/agents/` only if you confirm. They serve as examples you can customize or use as-is.
+
+### Local Development
+
+For development or local use in a project:
+
 ```bash
 npm install
 npm run build
 npm link
+```
+
+Then run setup:
+
+```bash
+klaude setup-hooks
 ```
 
 **Note for pnpm users:** `better-sqlite3` requires native compilation. If you get a "Could not locate the bindings file" error, you need to manually build it:
@@ -24,6 +58,8 @@ enable-pre-post-scripts=true
 
 ## Quick Start
 
+### Starting Klaude from Terminal
+
 ```bash
 cd your-project
 klaude
@@ -36,6 +72,22 @@ klaude start orchestrator "build auth system"
 klaude sessions
 enter-agent <agent-id>  # switch to another agent
 ```
+
+### Using Klaude from Within Claude Code
+
+Claude Code itself can invoke klaude to spawn specialized agents for delegated work. For example, in a Claude conversation, you can ask:
+
+> "Use klaude to start a programmer agent to implement the authentication system."
+
+This will spawn an agent in the background while you continue your conversation. You can:
+
+- **Spawn agents**: `klaude start <agent-type> "<task description>"` — creates a new agent to work on a task
+- **Check progress**: `klaude sessions` — view all active agents and their status
+- **Switch agents**: `enter-agent <session-id>` or `klaude checkout <session-id>` — jump to another agent's session
+- **Send messages**: `klaude message <session-id> "<instruction>"` — asynchronously direct an agent
+- **Monitor logs**: `klaude logs <session-id>` — view what an agent is doing in real time
+
+This enables powerful multi-agent workflows where Claude orchestrates specialized agents while maintaining context and coordinating their work.
 
 Agent types are dynamically loaded from your agents directory (e.g., `~/.claude/agents/` or `./.claude/agents/`). Any agent definition available there can be used with `klaude start`.
 
