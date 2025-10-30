@@ -14,6 +14,23 @@ export async function tailSessionLog(
   const raw = Boolean(options.raw);
   let printedStream = false;
 
+  // To determine end-of-session, check for specific events
+  const isTerminalEvent = (line: string): boolean => {
+    try {
+      const obj = JSON.parse(line);
+      if (obj && typeof obj === 'object' && typeof obj.kind === 'string') {
+        const k = obj.kind as string;
+        return (
+          k === 'agent.runtime.done' ||
+          k === 'agent.runtime.process.exited' ||
+          k === 'wrapper.finalized' ||
+          k === 'wrapper.claude.exited'
+        );
+      }
+    } catch {}
+    return false;
+  };
+
   const handleLine = (line: string): void => {
     if (raw) {
       process.stdout.write(line + '\n');
@@ -53,18 +70,32 @@ export async function tailSessionLog(
 
   // Print existing content first (filtered)
   let position = 0;
+  let foundTerminalEvent = false;
   try {
     const content = await fsp.readFile(logPath, 'utf-8');
     if (content.length > 0) {
       const lines = content.split('\n');
       for (const line of lines) {
-        if (line) handleLine(line);
+        if (line) {
+          handleLine(line);
+          if (options.untilExit && isTerminalEvent(line)) {
+            foundTerminalEvent = true;
+          }
+        }
       }
       position = Buffer.byteLength(content, 'utf-8');
     }
   } catch {
     // if not exists yet, start at 0 and wait
     position = 0;
+  }
+
+  // If session is already complete, print completion message and return
+  if (foundTerminalEvent) {
+    if (!raw) {
+      console.log('\n✅ Session completed');
+    }
+    return;
   }
 
   const { watch } = await import('node:fs');
@@ -76,23 +107,6 @@ export async function tailSessionLog(
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
-
-  // To determine end-of-session, watch for specific events in appended lines
-  const isTerminalEvent = (line: string): boolean => {
-    try {
-      const obj = JSON.parse(line);
-      if (obj && typeof obj === 'object' && typeof obj.kind === 'string') {
-        const k = obj.kind as string;
-        return (
-          k === 'agent.runtime.done' ||
-          k === 'agent.runtime.process.exited' ||
-          k === 'wrapper.finalized' ||
-          k === 'wrapper.claude.exited'
-        );
-      }
-    } catch {}
-    return false;
-  };
 
   const readChunk = async (): Promise<void> => {
     try {

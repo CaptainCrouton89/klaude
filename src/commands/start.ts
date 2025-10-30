@@ -110,6 +110,13 @@ export function registerStartCommand(program: Command): void {
         // Attach only if explicitly requested
         if (options.attach && !checkoutPerformed) {
           await tailSessionLog(result.logPath, { untilExit: true, raw: Boolean(options.verbose) });
+          // Print session metadata after completion for easy reference
+          if (!options.verbose) {
+            console.log(`\nsession: ${result.sessionId}`);
+            console.log(`  - Check out:     klaude checkout ${result.sessionId}`);
+            console.log(`  - Send message:  klaude message ${result.sessionId} "<prompt>"`);
+            console.log(`  - View logs:     klaude logs ${result.sessionId}`);
+          }
         }
       } catch (error) {
         printError(error);

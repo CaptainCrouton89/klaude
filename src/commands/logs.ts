@@ -77,7 +77,7 @@ export function registerLogsCommand(program: Command): void {
             if (lineLimit) {
               console.warn('⚠️  Ignoring line limit options with --follow');
             }
-            await tailSessionLog(logPath, { untilExit: false, raw: Boolean(options.raw) });
+            await tailSessionLog(logPath, { untilExit: true, raw: Boolean(options.raw) });
           } else if (options.summary) {
             if (lineLimit) {
               console.warn('⚠️  Ignoring line limit options with --summary');
