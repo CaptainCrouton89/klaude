@@ -45,6 +45,7 @@ interface RuntimeInitPayload {
     model?: string | null;
     fallbackModel?: string | null;
     permissionMode?: PermissionMode | null;
+    pathToClaudeCodeExecutable?: string | null;
   };
   /**
    * All available MCP servers from registries (.mcp.json, config.yaml)
@@ -184,9 +185,9 @@ async function blockTaskToolHook(
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: `ERROR: The Task tool is replaced with \`klaude start ${agentType} "${promptPreview}..." [options]\`. You MUST re-delegate this task, but use klaude instead.
+        permissionDecisionReason: `The Task tool is replaced with \`klaude start ${agentType} "${promptPreview}..." [options]\`. You MUST re-delegate this task, but use klaude instead. Treat this just like you would the Task tool, but use the klaude cli instead.
 
-To spawn an agent, use:
+To start a task, use:
   klaude start ${agentType} "${promptPreview}..." [options]
 
 Available options:
@@ -226,6 +227,9 @@ async function buildQueryOptions(
   }
   if (init.sdk?.fallbackModel) {
     options.fallbackModel = init.sdk.fallbackModel;
+  }
+  if (init.sdk?.pathToClaudeCodeExecutable) {
+    options.pathToClaudeCodeExecutable = init.sdk.pathToClaudeCodeExecutable;
   }
 
   // Continue a specific Claude session if requested

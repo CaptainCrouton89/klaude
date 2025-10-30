@@ -975,6 +975,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         model: configuredModel,
         permissionMode: config.sdk?.permissionMode ?? null,
         fallbackModel: config.sdk?.fallbackModel ?? null,
+        pathToClaudeCodeExecutable: claudeBinary,
       },
       availableMcps,
       parentMcps,
