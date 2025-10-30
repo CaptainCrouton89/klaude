@@ -229,17 +229,6 @@ async function parseAgentFile(
   };
 }
 
-export function composeAgentPrompt(definition: AgentDefinition | null, userPrompt: string): string {
-  const segments: string[] = [];
-  if (definition?.description) {
-    segments.push(definition.description);
-  }
-  if (definition?.instructions) {
-    segments.push(definition.instructions);
-  }
-  segments.push(userPrompt);
-  return segments.join('\n\n');
-}
 
 async function readAgentFile(
   agentType: string,

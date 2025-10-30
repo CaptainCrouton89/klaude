@@ -6,7 +6,6 @@ import type { WriteStream } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 
 import {
-  composeAgentPrompt,
   loadAgentDefinition,
 } from '@/services/agent-definitions.js';
 import type { AgentDefinition } from '@/services/agent-definitions.js';
@@ -634,15 +633,11 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       }
     }
 
-    const composedPrompt = agentDefinition
-      ? composeAgentPrompt(agentDefinition, payload.prompt)
-      : payload.prompt;
-
     if (runtimeKind === 'claude') {
       await startAgentRuntimeProcess(
         session,
         agentType,
-        { ...payload, prompt: composedPrompt },
+        payload,
         shareResumeId,
         agentDefinition ?? null,
       );
@@ -650,7 +645,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       await startCursorAgentProcess(
         session,
         agentType,
-        { ...payload, prompt: composedPrompt },
+        payload,
         agentDefinition ?? null,
       );
     }
@@ -959,6 +954,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       sessionId: session.id,
       agentType,
       prompt: payload.prompt,
+      outputStyle: agentDefinition?.instructions ?? undefined,
       options: payload.options ?? {},
       resumeClaudeSessionId: resumeClaudeSessionId ?? undefined,
       metadata: {
@@ -1025,7 +1021,12 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       cursorArgs.push('--model', modelOverride);
     }
     cursorArgs.push('--');
-    cursorArgs.push(payload.prompt);
+
+    // For cursor agents, prepend agent instructions to the prompt with separator
+    const cursorPrompt = agentDefinition?.instructions
+      ? `${agentDefinition.instructions}\n\n---\n\n${payload.prompt}`
+      : payload.prompt;
+    cursorArgs.push(cursorPrompt);
 
     const child = spawn('cursor-agent', cursorArgs, {
       cwd: context.projectRoot,
