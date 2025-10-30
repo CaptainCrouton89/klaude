@@ -177,14 +177,14 @@ export function registerHookCommand(program: Command): void {
             hookSpecificOutput: {
               hookEventName: "PreToolUse",
               permissionDecision: "deny",
-              permissionDecisionReason: `ERROR: The Task tool is replaced with \`klaude start ${agentType} "${promptPreview}..." [options]\`. You MUST re-delegate this task, but use klaude instead.
+              permissionDecisionReason: `The Task tool is replaced with \`klaude start ${agentType} "${promptPreview}..." [options]\`. You MUST re-delegate this task, but use klaude instead. Treat this just like you would the Task tool, but use the klaude cli instead.
 
-To spawn an agent, use:
+To start a task, use:
   klaude start ${agentType} "${promptPreview}..." [options]
 
 Available options:
   --attach    Attach to agent in foreground (blocks until complete). Do this when the task is a dependency for a known next step.
-  --detach    Run agent in background (default).`
+  --detach    Run agent in background (default).`,
             },
           };
           process.stdout.write(JSON.stringify(response) + '\n');
@@ -222,16 +222,11 @@ Available options:
 
           const result = await handlePreUserMessageHook(payload as PreUserMessagePayload);
 
-          if (result.systemMessage) {
-            const response = {
-              hookSpecificOutput: {
-                hookEventName: 'PreUserMessage',
-                systemMessage: result.systemMessage,
-              },
-            };
-            process.stdout.write(JSON.stringify(response) + '\n');
+          if (result) {
+            // Result is already JSON stringified from the hook
+            process.stdout.write(result + '\n');
           }
-          // If no system message (no @agent- pattern detected), no response = allow through
+          // If no result (no @agent- pattern detected), no response = allow through
         } catch (error) {
           let msg: string;
           let code: string;

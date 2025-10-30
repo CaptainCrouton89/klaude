@@ -1,19 +1,19 @@
-import { promises as fsp } from 'node:fs';
 import {
-  initializeDatabase,
   closeDatabase,
+  createClaudeSessionLink,
+  createEvent,
+  getClaudeSessionLink,
   getProjectByHash,
   getSessionById,
-  createClaudeSessionLink,
-  updateSessionClaudeLink,
-  createEvent,
+  initializeDatabase,
   markClaudeSessionEnded,
-  getClaudeSessionLink,
+  updateSessionClaudeLink,
 } from '@/db/index.js';
+import { loadConfig } from '@/services/config-loader.js';
 import { KlaudeError } from '@/utils/error-handler.js';
 import { appendSessionEvent } from '@/utils/logger.js';
 import { getSessionLogPath } from '@/utils/path-helper.js';
-import { loadConfig } from '@/services/config-loader.js';
+import { promises as fsp } from 'node:fs';
 
 async function debugLog(message: string, toStderr = true): Promise<void> {
   const timestamp = new Date().toISOString();
@@ -41,7 +41,8 @@ export interface ClaudeHookPayload {
 }
 
 export interface PreUserMessagePayload {
-  message: string;
+  message?: string;
+  prompt?: string;
   message_id?: string;
   timestamp?: string;
   session_id?: string;
@@ -308,16 +309,15 @@ export async function handleSessionEndHook(payload: ClaudeHookPayload): Promise<
   }
 }
 
-export async function handlePreUserMessageHook(payload: PreUserMessagePayload): Promise<{
-  systemMessage?: string;
-}> {
+export async function handlePreUserMessageHook(payload: PreUserMessagePayload): Promise<string> {
   // Check if we're in a klaude session; if not, return empty (allow through)
   if (!process.env.KLAUDE_PROJECT_HASH) {
-    return {};
+    return '';
   }
 
-  // Extract message text
-  const messageText = typeof payload.message === 'string' ? payload.message : '';
+  // Extract message text (can be in 'message' or 'prompt' field)
+  const messageText = (typeof payload.prompt === 'string' ? payload.prompt :
+                       typeof payload.message === 'string' ? payload.message : '');
 
   // Regex to detect @agent-<agent-name> pattern
   // Captures agent name like: @agent-planner, @agent-context-engineer, etc.
@@ -326,13 +326,19 @@ export async function handlePreUserMessageHook(payload: PreUserMessagePayload): 
 
   if (!match || !match[1]) {
     // No @agent- pattern found, pass through
-    return {};
+    return '';
   }
 
   const agentName = match[1];
 
-  // Generate system reminder suggesting klaude start command (without copying large prompts)
-  const systemMessage = `<system-reminder>Use \`klaude start ${agentName} "<your-prompt>" --attach\` to spawn this agent.</system-reminder>`;
+  // Generate JSON output for UserPromptSubmit hook with additionalContext
+  // This injects the suggestion as context that Claude will see and process
+  const output = {
+    hookSpecificOutput: {
+      hookEventName: 'UserPromptSubmit',
+      additionalContext: `<system-reminder>To use the ${agentName} agent, do not use the Task tool. Instead, run: \`klaude start ${agentName} "<your-prompt>"\`</system-reminder>`,
+    },
+  };
 
-  return { systemMessage };
+  return JSON.stringify(output);
 }
