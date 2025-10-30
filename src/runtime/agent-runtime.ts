@@ -19,8 +19,7 @@ import type {
   SDKAssistantMessage,
   SDKMessage,
   SDKPartialAssistantMessage,
-  SDKResultMessage,
-  SDKUserMessage,
+  SDKResultMessage
 } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerConfig } from '../types/index.js';
 
@@ -159,85 +158,6 @@ function extractMessageText(message: SDKMessage): string | null {
     default:
       return null;
   }
-}
-
-async function* createMessageStream(
-  abortController: AbortController,
-  initialPrompt: string,
-): AsyncGenerator<SDKUserMessage> {
-  emit({ type: 'log', level: 'info', message: 'Streaming input mode: agent ready for messages' });
-
-  // First, yield the initial prompt
-  yield {
-    type: 'user',
-    session_id: 'placeholder',
-    message: {
-      content: [
-        {
-          type: 'text',
-          text: initialPrompt,
-        },
-      ],
-    },
-    parent_tool_use_id: null,
-  } as SDKUserMessage;
-
-  // Then listen for additional messages from stdin
-  const rl = readline.createInterface({
-    input: stdin,
-    terminal: false,
-  });
-
-  let messageCount = 0;
-
-  try {
-    for await (const line of rl) {
-      if (abortController.signal.aborted) {
-        emit({ type: 'log', level: 'info', message: 'Message stream aborted' });
-        break;
-      }
-
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-
-      try {
-        const parsed = JSON.parse(trimmed) as { type?: string; prompt?: string };
-        if (parsed.type === 'message' && parsed.prompt) {
-          messageCount++;
-          emit({ type: 'log', level: 'info', message: `Received message ${messageCount}: ${parsed.prompt.slice(0, 50)}...` });
-          yield {
-            type: 'user',
-            session_id: 'placeholder',
-            message: {
-              content: [
-                {
-                  type: 'text',
-                  text: parsed.prompt,
-                },
-              ],
-            },
-            parent_tool_use_id: null,
-          } as SDKUserMessage;
-        }
-      } catch (parseError) {
-        const errMsg = parseError instanceof Error ? parseError.message : String(parseError);
-        emit({
-          type: 'log',
-          level: 'warn',
-          message: `Failed to parse message from stdin: ${errMsg}`,
-        });
-      }
-    }
-  } catch (streamError) {
-    const errMsg = streamError instanceof Error ? streamError.message : String(streamError);
-    emit({ type: 'log', level: 'error', message: `Message stream error: ${errMsg}` });
-  } finally {
-    rl.close();
-  }
-
-  emit({ type: 'log', level: 'info', message: 'Message stream closed' });
 }
 
 /**
