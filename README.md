@@ -148,13 +148,13 @@ Klaude is stateful—session data persists in SQLite after you exit. You can res
 
 ## MCP Server Configuration
 
-Agents can be configured with specific MCP (Model Context Protocol) servers, giving them access to different tools and data sources. MCPs are configured at two levels:
+Agents can be configured with specific MCP (Model Context Protocol) servers, giving them access to different tools and data sources. MCPs are configured across three scopes with precedence: **Local > Project > User**.
 
-### Global MCP Registry
+### MCP Scopes
 
-Define available MCP servers in `~/.klaude/.mcp.json` or project `.mcp.json`:
+Define available MCP servers at three levels:
 
-**~/.klaude/.mcp.json** (klaude global MCP registry):
+**User Scope: `~/.klaude/.mcp.json`** (klaude global MCP registry, lowest priority):
 ```json
 {
   "mcpServers": {
@@ -179,7 +179,7 @@ Define available MCP servers in `~/.klaude/.mcp.json` or project `.mcp.json`:
 }
 ```
 
-**Project `.mcp.json`** (standard Claude Code format):
+**Project Scope: `<project>/.mcp.json`** (shared via version control, medium priority):
 ```json
 {
   "mcpServers": {
@@ -191,6 +191,20 @@ Define available MCP servers in `~/.klaude/.mcp.json` or project `.mcp.json`:
   }
 }
 ```
+
+**Local Scope: `<project>/.claude/settings.json`** (project-specific user settings, highest priority):
+```json
+{
+  "mcpServers": {
+    "personal-dev-server": {
+      "type": "stdio",
+      "command": "/path/to/local/mcp-server"
+    }
+  }
+}
+```
+
+> **Note**: Local scope MCPs are typically stored in `.claude/settings.json` which is usually gitignored, making them ideal for personal development servers, experimental configurations, or sensitive credentials specific to your machine.
 
 ### Per-Agent MCP Configuration
 
@@ -208,15 +222,15 @@ Agent instructions here...
 ```
 
 **Frontmatter Fields:**
-- `mcpServers`: Comma-separated list of MCP names from the registry
-- `inheritProjectMcps`: Inherit all MCPs from project `.mcp.json` (default: true)
+- `mcpServers`: Comma-separated list of MCP names from the registry (all three scopes)
+- `inheritProjectMcps`: Inherit all MCPs from all scopes (default: true)
 - `inheritParentMcps`: Inherit parent agent's MCPs (default: false)
 
 **Resolution Logic:**
 1. If `mcpServers` is specified → Use ONLY those MCPs (explicit override)
 2. Otherwise:
-   - If `inheritProjectMcps !== false` → Start with all project MCPs
-   - If `inheritParentMcps === true` → Add parent's MCPs
+   - If `inheritProjectMcps !== false` → Start with all available MCPs (local, project, and user scopes merged)
+   - If `inheritParentMcps === true` → Add parent agent's resolved MCPs
 
 **Examples:**
 

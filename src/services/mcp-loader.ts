@@ -1,8 +1,9 @@
 /**
  * MCP server loading from multiple sources
- * Loads MCPs from:
- * 1. Project .mcp.json (standard Claude Code format)
- * 2. ~/.klaude/.mcp.json (klaude global MCP registry)
+ * Loads MCPs from three scopes with precedence: Local > Project > User
+ * 1. User scope: ~/.klaude/.mcp.json (klaude global MCP registry)
+ * 2. Project scope: <project>/.mcp.json (shared, version-controlled)
+ * 3. Local scope: <project>/.claude/settings.json (project-specific user settings)
  */
 
 import { existsSync, promises as fsp } from 'node:fs';
@@ -49,6 +50,36 @@ export async function loadProjectMcps(projectRoot: string): Promise<Record<strin
 }
 
 /**
+ * Load local MCPs from .claude/settings.json (project-specific user settings)
+ * Returns empty object if file doesn't exist or is invalid
+ */
+export async function loadLocalMcps(projectRoot: string): Promise<Record<string, McpServerConfig>> {
+  const localSettingsPath = path.join(projectRoot, '.claude', 'settings.json');
+
+  if (!existsSync(localSettingsPath)) {
+    return {};
+  }
+
+  try {
+    const content = await fsp.readFile(localSettingsPath, 'utf-8');
+    const parsed = JSON.parse(content) as McpJsonFile;
+
+    if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') {
+      return {};
+    }
+
+    return parsed.mcpServers;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      console.warn(`Invalid JSON in .claude/settings.json at ${localSettingsPath}`);
+    } else if (error instanceof Error) {
+      console.warn(`Failed to load .claude/settings.json from ${localSettingsPath}: ${error.message}`);
+    }
+    return {};
+  }
+}
+
+/**
  * Load MCPs from ~/.klaude/.mcp.json (klaude global MCP registry)
  * Returns empty object if not configured
  */
@@ -82,17 +113,22 @@ export async function loadKlaudeMcps(): Promise<Record<string, McpServerConfig>>
 
 /**
  * Load all available MCP servers from all sources
- * Precedence: Project .mcp.json > ~/.klaude/.mcp.json
+ * Precedence (highest to lowest): Local > Project > User
+ * - User: ~/.klaude/.mcp.json
+ * - Project: <project>/.mcp.json
+ * - Local: <project>/.claude/settings.json
  */
 export async function loadAvailableMcps(projectRoot: string): Promise<Record<string, McpServerConfig>> {
-  const [klaudeMcps, projectMcps] = await Promise.all([
+  const [userMcps, projectMcps, localMcps] = await Promise.all([
     loadKlaudeMcps(),
     loadProjectMcps(projectRoot),
+    loadLocalMcps(projectRoot),
   ]);
 
-  // Project MCPs override klaude global MCPs for same names
+  // Merge with correct precedence: local overrides project, project overrides user
   return {
-    ...klaudeMcps,
-    ...projectMcps,
+    ...userMcps,    // User scope (lowest priority)
+    ...projectMcps, // Project scope (medium priority, overrides user)
+    ...localMcps,   // Local scope (highest priority, overrides both)
   };
 }

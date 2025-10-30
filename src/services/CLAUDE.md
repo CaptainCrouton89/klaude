@@ -8,7 +8,12 @@ Core business logic for spawning Claude, managing wrapper instances, coordinatin
 
 **Agent Definition Loading** (`agent-definitions.ts`): Parses agent markdown files from project and user directories. Files use YAML frontmatter (delimited by `---`) with metadata keys (name, description, allowedAgents, model, color, mcpServers, inheritProjectMcps, inheritParentMcps) followed by instructions. Supports arrays, booleans, and strings in frontmatter. Caching prevents repeated file reads.
 
-**MCP Resolution** (`mcp-loader.ts`, `mcp-resolver.ts`): Loads MCPs from project `.mcp.json` and `~/.klaude/.mcp.json` (global registry). Agents inherit project MCPs by default; can override with `mcpServers` frontmatter or inherit parent agent's MCPs via `inheritParentMcps: true`.
+**MCP Resolution** (`mcp-loader.ts`, `mcp-resolver.ts`): Loads MCPs from three scopes with precedence Local > Project > User:
+  - User scope: `~/.klaude/.mcp.json` (klaude global registry)
+  - Project scope: `<project>/.mcp.json` (shared, version-controlled)
+  - Local scope: `<project>/.claude/settings.json` (project-specific user settings)
+
+  Agents inherit project MCPs by default; can override with `mcpServers` frontmatter or inherit parent agent's MCPs via `inheritParentMcps: true`.
 
 **Session Log Streaming** (`session-log.ts`): Reads and formats newline-delimited JSON session logs. Supports tailing with file watching, filtering to assistant messages, summarizing events, and waiting for first output. Detects terminal events (done/exited/finalized) to stop gracefully.
 
