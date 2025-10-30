@@ -1008,6 +1008,13 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     );
 
     const cursorArgs = ['-p', '--output-format', 'stream-json'];
+
+    // Add --force if SDK permission mode bypasses permissions
+    const sdkPermissionMode = config.sdk?.permissionMode ?? 'bypassPermissions';
+    if (sdkPermissionMode === 'bypassPermissions') {
+      cursorArgs.push('--force');
+    }
+
     const modelOverride = agentDefinition?.model;
     if (modelOverride && modelOverride.trim().length > 0) {
       cursorArgs.push('--model', modelOverride);
