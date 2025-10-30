@@ -482,12 +482,15 @@ async function run(): Promise<void> {
     // Run the initial query
     await processQueryStream(stream);
 
-    // After initial query, listen for additional messages
-    emit({ type: 'log', level: 'info', message: 'Initial query complete, listening for messages on stdin' });
-    await listenForMessages();
-
+    // Initial query is complete - mark session as completed immediately
+    // This allows `klaude wait` and `klaude status` to reflect completion
     emit({ type: 'status', status: 'completed' });
     finalize('done');
+
+    // Continue listening for additional messages (e.g., from `klaude message`)
+    // This doesn't block session completion - the runtime stays alive for future messages
+    emit({ type: 'log', level: 'info', message: 'Initial query complete, listening for additional messages on stdin' });
+    await listenForMessages();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     emit({ type: 'error', message, stack: error instanceof Error ? error.stack : undefined });
