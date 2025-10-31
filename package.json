@@ -1,6 +1,6 @@
 {
   "name": "klaude",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "TypeScript CLI wrapper for Claude Agent SDK with multi-agent session management",
   "type": "module",
   "main": "dist/index.js",

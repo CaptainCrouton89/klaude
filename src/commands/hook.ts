@@ -171,6 +171,13 @@ export function registerHookCommand(program: Command): void {
           }
 
           const agentType = toolInput.subagent_type;
+
+          // Allow Plan and Explore agents to use native Task tool
+          const TASK_TOOL_EXEMPT_AGENTS = ['Plan', 'Explore'];
+          if (TASK_TOOL_EXEMPT_AGENTS.includes(agentType)) {
+            return; // Allow through (no response = allowed)
+          }
+
           const promptPreview = toolInput.prompt.slice(0, 10);
 
           const response = {
