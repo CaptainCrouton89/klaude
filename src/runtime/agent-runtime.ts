@@ -23,20 +23,12 @@ import type { McpServerConfig } from '../types/index.js';
 
 type PermissionMode = QueryOptions['permissionMode'];
 
-/**
- * Extended QueryOptions to include output_style parameter.
- * This may be a newer SDK feature not yet included in the type definitions.
- */
-interface ExtendedQueryOptions extends QueryOptions {
-  output_style?: string;
-}
-
 interface RuntimeInitPayload {
   sessionId: string;
   agentType: string;
   prompt: string;
   /**
-   * Agent instructions to be passed as output_style parameter to SDK
+   * Agent instructions to be appended to the system prompt via systemPrompt.append
    */
   outputStyle?: string | null;
   options?: {
@@ -210,8 +202,11 @@ To start a task, use:
   klaude start ${agentType} "${promptPreview}..." [options]
 
 Available options:
-  --attach    Attach to agent in foreground (blocks until complete). Do this when the task is a dependency for a known next step.
-  --detach    Run agent in background (default).`,
+  --attach    Attach to agent in foreground (blocks until complete). Use this when the task is a dependency for a known next step.
+  --checkout  Request immediate checkout after start (enter interactive TUI).
+  --share     Share current context with the new agent.
+
+Note: By default, agents run in background. Use --attach when you need to wait for results.`,
       },
     };
   }
@@ -222,11 +217,11 @@ Available options:
 async function buildQueryOptions(
   init: RuntimeInitPayload,
   abortController: AbortController,
-): Promise<ExtendedQueryOptions> {
+): Promise<QueryOptions> {
   // Klaude agents run in bypassPermissions mode by default
   const permissionMode: PermissionMode = init.sdk?.permissionMode ? init.sdk.permissionMode : 'bypassPermissions';
 
-  const options: ExtendedQueryOptions = {
+  const options: QueryOptions = {
     abortController,
     includePartialMessages: true,
     permissionMode,
@@ -291,9 +286,14 @@ async function buildQueryOptions(
     }
   }
 
-  // Add agent instructions as output_style if provided
+  // Add agent instructions as appended system prompt if provided
   if (init.outputStyle && init.outputStyle.trim().length > 0) {
-    options.output_style = init.outputStyle;
+    options.systemPrompt = {
+      type: 'preset',
+      preset: 'claude_code',
+      append: init.outputStyle,
+    };
+    options.settingSources = ['project'];
   }
 
   return options;
@@ -302,12 +302,16 @@ async function buildQueryOptions(
 async function run(): Promise<void> {
   const init = await readRuntimeConfig();
 
-  // Either prompt or outputStyle is required
+  // Prompt is required
   const hasPrompt = init.prompt && init.prompt.trim().length > 0;
-  const hasOutputStyle = init.outputStyle && init.outputStyle.trim().length > 0;
+  if (!hasPrompt) {
+    throw new Error('Prompt is required');
+  }
 
-  if (!hasPrompt && !hasOutputStyle) {
-    throw new Error('Either prompt or outputStyle must be provided');
+  // outputStyle (agent instructions) is required
+  const hasOutputStyle = init.outputStyle && init.outputStyle.trim().length > 0;
+  if (!hasOutputStyle) {
+    throw new Error('Agent instructions (outputStyle) are required');
   }
 
   const abortController = new AbortController();

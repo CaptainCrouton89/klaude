@@ -190,8 +190,11 @@ To start a task, use:
   klaude start ${agentType} "${promptPreview}..." [options]
 
 Available options:
-  --attach    Attach to agent in foreground (blocks until complete). Do this when the task is a dependency for a known next step.
-  --detach    Run agent in background (default).`,
+  --attach    Attach to agent in foreground (blocks until complete). Use this when the task is a dependency for a known next step.
+  --checkout  Request immediate checkout after start (enter interactive TUI).
+  --share     Share current context with the new agent.
+
+Note: By default, agents run in background. Use --attach when you need to wait for results.`,
             },
           };
           process.stdout.write(JSON.stringify(response) + '\n');
@@ -252,6 +255,121 @@ Available options:
           console.error(`PreUserMessage hook failed: code=${code}, error=${msg}`);
           printError(error);
           throw error;
+        }
+      }),
+  );
+
+  // post-tool-use-updates hook (injects child agent updates as context)
+  hookCmd.addCommand(
+    new Command('post-tool-use-updates')
+      .description('Handle PostToolUse hook to inject child agent updates')
+      .action(async () => {
+        // Check if we're in a klaude session; if not, allow all
+        if (!process.env.KLAUDE_PROJECT_HASH) {
+          return; // Exit silently (no output)
+        }
+
+        let rawPayload: string;
+        try {
+          rawPayload = await readStdin();
+        } catch (stdinError) {
+          // Silent error - don't block tool use
+          const stdinMsg = stdinError instanceof Error ? stdinError.message : String(stdinError);
+          console.error(`[PostToolUseUpdates] Failed to read stdin: ${stdinMsg}`);
+          return;
+        }
+
+        let payload: unknown;
+        try {
+          payload = JSON.parse(rawPayload);
+        } catch (parseError) {
+          // Silent error - don't block tool use
+          const parseMsg = parseError instanceof Error ? parseError.message : String(parseError);
+          console.error(`[PostToolUseUpdates] Failed to parse payload: ${parseMsg}`);
+          return;
+        }
+
+        try {
+          const { initializeDatabase, listPendingUpdatesByParent, markUpdateAcknowledged, getSessionById } = await import('@/db/index.js');
+
+          // Initialize database
+          await initializeDatabase();
+
+          // Get session ID from payload
+          const sessionPayload = payload as { session_id?: string };
+          const sessionId = sessionPayload.session_id;
+
+          if (!sessionId) {
+            return; // No session ID, exit silently
+          }
+
+          // Get session to verify it exists
+          const session = getSessionById(sessionId);
+          if (!session) {
+            return; // Session not found, exit silently
+          }
+
+          // Query pending updates from children
+          const updates = listPendingUpdatesByParent(sessionId);
+
+          // If no updates, exit silently (no output)
+          if (updates.length === 0) {
+            return;
+          }
+
+          // Format updates with metadata
+          const formattedUpdates = updates
+            .map((update) => {
+              const childSession = getSessionById(update.session_id);
+              const agentType = childSession ? childSession.agent_type : 'unknown';
+              const sessionSuffix = update.session_id.slice(-6);
+              const timestamp = new Date(update.created_at).toLocaleTimeString('en-US', {
+                hour12: false,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+              });
+
+              return `[${timestamp}] [${agentType}] (${sessionSuffix}) ${update.update_text}`;
+            })
+            .join('\n');
+
+          const contextBlock = `<notification>
+Recent updates from child agents:
+${formattedUpdates}
+</notification>`;
+
+          // Mark all updates as acknowledged
+          for (const update of updates) {
+            try {
+              markUpdateAcknowledged(update.id);
+            } catch (ackError) {
+              // Non-fatal error - continue processing other updates
+              const ackMsg = ackError instanceof Error ? ackError.message : String(ackError);
+              console.error(`[PostToolUseUpdates] Failed to acknowledge update ${update.id}: ${ackMsg}`);
+            }
+          }
+
+          // Output JSON response with injected context
+          const response = {
+            hookSpecificOutput: {
+              hookEventName: 'PostToolUse',
+              additionalContext: contextBlock,
+            },
+          };
+
+          process.stdout.write(JSON.stringify(response) + '\n');
+        } catch (error) {
+          // Non-fatal error - log but don't fail hook
+          if (error instanceof Error) {
+            console.error(`[PostToolUseUpdates] Error: ${error.message}`);
+            if (error.stack) {
+              console.error(`[PostToolUseUpdates] Stack: ${error.stack}`);
+            }
+          } else {
+            console.error(`[PostToolUseUpdates] Error: ${String(error)}`);
+          }
+          // Exit 0 to not block tool use
         }
       }),
   );
