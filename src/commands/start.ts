@@ -91,9 +91,11 @@ export function registerStartCommand(program: Command): void {
         if (requestedCheckout && !checkoutSupported) {
           console.log('Checkout is not supported for cursor-backed agents; ignoring --checkout.');
         } else if (requestedCheckout) {
+          // For fresh sessions, wait longer to ensure Claude has fully persisted the conversation
+          // before attempting to resume it. This prevents "No conversation found" errors.
           const checkoutResponse = await requestCheckout(instance.socketPath, {
             sessionId: result.sessionId,
-            waitSeconds: 5,
+            waitSeconds: 15,
           });
           if (!checkoutResponse.ok) {
             throw new KlaudeError(checkoutResponse.error.message, checkoutResponse.error.code);

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { accessSync, appendFileSync, constants as fsConstants } from 'node:fs';
+import { accessSync, appendFileSync, constants as fsConstants, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -60,6 +60,78 @@ function parseModuleMismatch(error: unknown): {
   };
 }
 
+function appendIfMissing(list: string[], value: string): void {
+  if (!value) {
+    return;
+  }
+  if (!list.includes(value)) {
+    list.push(value);
+  }
+}
+
+function collectHomebrewNodeBinaries(): string[] {
+  const results: string[] = [];
+  const prefixes = new Set<string>();
+  if (process.env.HOMEBREW_PREFIX) {
+    prefixes.add(process.env.HOMEBREW_PREFIX);
+  }
+  prefixes.add('/opt/homebrew');
+  prefixes.add('/usr/local');
+
+  for (const prefix of prefixes) {
+    if (!prefix) {
+      continue;
+    }
+
+    const optDir = path.join(prefix, 'opt');
+    try {
+      const entries = readdirSync(optDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        if (entry.name !== 'node' && !entry.name.startsWith('node@')) {
+          continue;
+        }
+        const candidate = path.join(optDir, entry.name, 'bin', 'node');
+        appendIfMissing(results, candidate);
+      }
+    } catch {
+      // ignore missing opt directory
+    }
+
+    const cellarDir = path.join(prefix, 'Cellar');
+    try {
+      const entries = readdirSync(cellarDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        if (entry.name !== 'node' && !entry.name.startsWith('node@')) {
+          continue;
+        }
+        const versionDir = path.join(cellarDir, entry.name);
+        try {
+          const versions = readdirSync(versionDir, { withFileTypes: true });
+          for (const version of versions) {
+            if (!version.isDirectory()) {
+              continue;
+            }
+            const candidate = path.join(versionDir, version.name, 'bin', 'node');
+            appendIfMissing(results, candidate);
+          }
+        } catch {
+          // ignore traversal failures
+        }
+      }
+    } catch {
+      // ignore missing cellar directory
+    }
+  }
+
+  return results;
+}
+
 function findNodeBinary(targetVersion: string, preferred: string | null): string | null {
   const seen = new Set<string>();
   const candidates: string[] = [];
@@ -80,6 +152,10 @@ function findNodeBinary(targetVersion: string, preferred: string | null): string
       continue;
     }
     candidates.push(path.join(segment, 'node'));
+  }
+
+  for (const candidate of collectHomebrewNodeBinaries()) {
+    candidates.push(candidate);
   }
 
   for (const candidate of candidates) {
@@ -261,6 +337,11 @@ export async function ensureCompatibleNode(): Promise<void> {
     );
     console.error(`   Current Node ABI: ${process.versions.modules} (${process.execPath})`);
     console.error('   Install a matching Node version or rebuild better-sqlite3 for your runtime.');
+    if (process.platform === 'darwin' && process.arch === 'arm64') {
+      console.error(
+        '   Apple Silicon tip: run the rebuild from an arm64 shell (e.g. `arch -arm64 zsh`) to avoid generating x86_64 binaries under Rosetta.',
+      );
+    }
     logBootstrap(
       `ensureCompatibleNode mismatch detected required=${mismatch.requiredVersion} but no candidate found`,
     );
