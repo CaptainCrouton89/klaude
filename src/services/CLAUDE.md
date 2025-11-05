@@ -20,6 +20,10 @@ Core business logic for spawning Claude, managing wrapper instances, coordinatin
 
 **Agent Runtime Event Streaming**: Child process outputs newline-delimited JSON events (status→claude-session→done/error). All recorded to DB + log.
 
+**Update Notifications** (`update-watcher.ts`, `wrapper-instance.ts`): Wrapper detects `[UPDATE] <text>` patterns in agent messages and stores them in `agent_updates` table. Parents poll via `UpdateWatcher` service or `klaude watch` command. Supports optional regex filtering and read acknowledgment.
+
+**Automatic Update Injection** (`hook.ts:post-tool-use-updates`): PostToolUse hook fires after every tool use and queries pending child updates, injecting them as context if available. Automatically marks updates as acknowledged to prevent duplication. Works with `*` matcher to ensure coverage across all tool types.
+
 ## Socket Protocol
 
 **Newline-delimited JSON**:

@@ -37,6 +37,12 @@ const KLAUDE_HOOKS: Record<string, Hook[]> = {
       hooks: [{ type: "command", command: "klaude hook task" }],
     },
   ],
+  PostToolUse: [
+    {
+      matcher: "*",
+      hooks: [{ type: "command", command: "klaude hook post-tool-use-updates" }],
+    },
+  ],
   UserPromptSubmit: [
     {
       hooks: [{ type: "command", command: "klaude hook pre-user-message" }],
