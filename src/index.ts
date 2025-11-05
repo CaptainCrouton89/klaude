@@ -49,6 +49,7 @@ void (async () => {
     { registerLogsCommand },
     { registerWaitCommand },
     { registerStatusCommand },
+    { registerWatchCommand },
   ] = await Promise.all([
     import('@/services/wrapper-instance.js'),
     import('@/utils/error-handler.js'),
@@ -65,6 +66,7 @@ void (async () => {
     import('@/commands/logs.js'),
     import('@/commands/wait.js'),
     import('@/commands/status.js'),
+    import('@/commands/watch.js'),
   ]);
 
   const program = new Command();
@@ -129,6 +131,7 @@ void (async () => {
   registerLogsCommand(program);
   registerWaitCommand(program);
   registerStatusCommand(program);
+  registerWatchCommand(program);
 
   program.action(async (options: OptionValues) => {
     try {

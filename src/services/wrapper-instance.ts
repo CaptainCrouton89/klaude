@@ -13,6 +13,7 @@ import type { ClaudeCliFlags, McpServerConfig } from '@/types/index.js';
 import {
   calculateSessionDepth,
   closeDatabase,
+  createAgentUpdate,
   createClaudeSessionLink,
   createEvent,
   createInstance,
@@ -425,6 +426,14 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       );
     }
 
+    // Ensure agent has instructions
+    if (!agentDefinition?.instructions || agentDefinition.instructions.trim().length === 0) {
+      throw new KlaudeError(
+        `Agent type ${requestedAgentType} has no instructions defined`,
+        'E_AGENT_INSTRUCTIONS_MISSING',
+      );
+    }
+
     const agentType = agentDefinition?.type ?? normalizedAgentType;
     const parentSessionId = payload.parentSessionId ?? rootSession.id;
 
@@ -557,6 +566,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         ? {
             name: agentDefinition.name,
             description: agentDefinition.description,
+            instructions: agentDefinition.instructions,
             allowedAgents: agentDefinition.allowedAgents,
             model: agentDefinition.model,
             color: agentDefinition.color,
@@ -710,6 +720,26 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
           payload: event.payload,
           text: event.text ?? null,
         });
+
+        // Extract [UPDATE] messages and push to parent
+        if (event.text && typeof event.text === 'string') {
+          const updatePattern = /\[UPDATE\]\s*(.+)/;
+          const match = event.text.match(updatePattern);
+          if (match && match[1]) {
+            const updateText = match[1].trim();
+            const session = getSessionById(sessionId);
+            if (session?.parent_id) {
+              try {
+                await createAgentUpdate(sessionId, session.parent_id, updateText);
+                debugLog(`[update-recorded] sessionId=${sessionId}, parentId=${session.parent_id}`);
+              } catch (error) {
+                const errMsg = error instanceof Error ? error.message : String(error);
+                debugLog(`[update-record-failed] sessionId=${sessionId}, error=${errMsg}`);
+                // Non-fatal - continue processing other events
+              }
+            }
+          }
+        }
         break;
       }
       case 'log': {
@@ -1408,6 +1438,77 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     processRef.kill('SIGTERM');
   }
 
+  async function ensureAgentRuntimeStopped(
+    sessionId: string,
+    waitSeconds: number,
+  ): Promise<boolean> {
+    const runtime = agentRuntimes.get(sessionId);
+    if (!runtime) {
+      return false;
+    }
+
+    const normalizedWait =
+      Number.isFinite(waitSeconds) && waitSeconds > 0 ? waitSeconds : 5;
+    const stopStart = Date.now();
+
+    debugLog(`[runtime-stop] sessionId=${sessionId}, signal=SIGTERM`);
+    try {
+      runtime.process.kill('SIGTERM');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      debugLog(`[runtime-stop-error] sessionId=${sessionId}, message=${message}`);
+    }
+
+    const deadline = stopStart + normalizedWait * 1000;
+    while (agentRuntimes.has(sessionId) && Date.now() < deadline) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 100);
+        if (typeof timer.unref === 'function') {
+          timer.unref();
+        }
+      });
+    }
+
+    if (!agentRuntimes.has(sessionId)) {
+      const elapsed = Date.now() - stopStart;
+      debugLog(`[runtime-stop-complete] sessionId=${sessionId}, elapsed=${elapsed}ms`);
+      return true;
+    }
+
+    const remainingRuntime = agentRuntimes.get(sessionId);
+    if (remainingRuntime) {
+      debugLog(`[runtime-stop-force] sessionId=${sessionId}, signal=SIGKILL`);
+      try {
+        remainingRuntime.process.kill('SIGKILL');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        debugLog(`[runtime-stop-force-error] sessionId=${sessionId}, message=${message}`);
+      }
+    }
+
+    const forceDeadline = Date.now() + 1000;
+    while (agentRuntimes.has(sessionId) && Date.now() < forceDeadline) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 100);
+        if (typeof timer.unref === 'function') {
+          timer.unref();
+        }
+      });
+    }
+
+    if (agentRuntimes.has(sessionId)) {
+      debugLog(`[runtime-stop-timeout] sessionId=${sessionId}`);
+      throw new KlaudeError(
+        `Timed out waiting for agent runtime ${sessionId} to stop`,
+        'E_AGENT_RUNTIME_TIMEOUT',
+      );
+    }
+
+    const totalElapsed = Date.now() - stopStart;
+    debugLog(`[runtime-stop-forced] sessionId=${sessionId}, elapsed=${totalElapsed}ms`);
+    return true;
+  }
+
   async function finalize(
     status: 'done' | 'failed' | 'interrupted',
     exitInfo: ClaudeExitResult | null,
@@ -1763,7 +1864,11 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
                 definitionRecord.description.trim().length > 0
                   ? definitionRecord.description
                   : null,
-              instructions: null,
+              instructions:
+                typeof definitionRecord.instructions === 'string' &&
+                definitionRecord.instructions.trim().length > 0
+                  ? definitionRecord.instructions
+                  : null,
               allowedAgents: allowed,
               model:
                 typeof definitionRecord.model === 'string' && definitionRecord.model.trim().length > 0
@@ -2059,6 +2164,20 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         `Target session ${targetSessionId} does not have a Claude session id`,
         'E_SWITCH_TARGET_MISSING',
       );
+    }
+
+    if (targetSessionId !== currentSessionId) {
+      const runtimeStopSeconds = Math.max(waitSeconds, 5);
+      const stopStart = Date.now();
+      const runtimeStopped = await ensureAgentRuntimeStopped(targetSessionId, runtimeStopSeconds);
+      if (runtimeStopped) {
+        const stopElapsed = Date.now() - stopStart;
+        debugLog(`[checkout-runtime-stopped] sessionId=${targetSessionId}, elapsed=${stopElapsed}ms`);
+        await recordSessionEvent(targetSessionId, 'wrapper.checkout.runtime_stopped', {
+          requestedBySessionId: currentSessionId,
+          waitSeconds: runtimeStopSeconds,
+        });
+      }
     }
 
     // Record explicit resume selection for traceability
