@@ -12,3 +12,4 @@ export * from './models/session.js';
 export * from './models/claude-session-link.js';
 export * from './models/runtime-process.js';
 export * from './models/event.js';
+export * from './models/agent-update.js';

@@ -10,6 +10,7 @@ TypeScript types and CRUD operations for SQLite schema entities.
 - `event.ts` – Event CRUD
 - `runtime-process.ts` – Process runtime CRUD
 - `claude-session-link.ts` – Claude ↔ Klaude link CRUD
+- `agent-update.ts` – Agent update CRUD (push notifications from agents to parents via `[UPDATE]` messages)
 
 ## Key Patterns
 
@@ -31,6 +32,21 @@ Sessions support parent-child relationships for multi-agent workflows:
 - `cascadeMarkSessionEnded(sessionId, status)` – Mark parent ended + auto-orphan children
 - `calculateSessionDepth(sessionId)` – Traverse parent chain to compute depth (0 for root sessions, increments per level; includes circular reference protection)
 
+## Agent Updates (Push Notifications)
+
+Agent updates provide a push notification mechanism for agents to send status updates to their parents:
+- `createAgentUpdate(sessionId, parentSessionId, updateText)` – Store update from child to parent
+- `listPendingUpdatesByParent(parentSessionId)` – Query unacknowledged updates for a parent session
+- `markUpdateAcknowledged(updateId)` – Mark update as read
+- `listUpdatesBySession(sessionId)` – Get all updates emitted from a session
+- `getAgentUpdateById(updateId)` – Fetch specific update
+
+**Trigger**: Wrapper extracts `[UPDATE] <text>` patterns from agent message events and stores them in DB.
+
+**Consumption**: Parents poll via `listPendingUpdatesByParent()` or use `UpdateWatcher` service for callbacks.
+
+**Acknowledgment**: Optional flag to track read status; unacknowledged updates persist until marked.
+
 ## Integration Notes
 
 - Used by `src/services/` for business logic
@@ -38,3 +54,4 @@ Sessions support parent-child relationships for multi-agent workflows:
 - Foreign keys enforced (`PRAGMA foreign_keys = ON` in `src/db/database.js`)
 - Event table supports streaming via query filters (session ID, timestamp range)
 - Session link relies on hook integration; see root CLAUDE.md for hook setup
+- Agent updates automatically cascade delete when sessions are deleted (foreign key)

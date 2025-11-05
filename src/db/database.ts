@@ -6,9 +6,9 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import DatabaseConstructor, {
-  type Database as BetterSqliteDatabase,
-  type Statement as BetterSqliteStatement,
+import type {
+  Database as BetterSqliteDatabase,
+  Statement as BetterSqliteStatement,
 } from 'better-sqlite3';
 
 import { getDbPath } from '@/utils/path-helper.js';
@@ -92,6 +92,60 @@ class Database {
 }
 
 let dbInstance: Database | null = null;
+type BetterSqlite3Constructor = (filename: string, options?: unknown) => BetterSqliteDatabase;
+
+let cachedConstructor: BetterSqlite3Constructor | null = null;
+
+async function loadBetterSqlite(): Promise<BetterSqlite3Constructor> {
+  if (cachedConstructor) {
+    return cachedConstructor;
+  }
+
+  try {
+    const mod = (await import('better-sqlite3')) as {
+      default?: BetterSqlite3Constructor;
+    };
+    const ctor = (mod.default ?? (mod as unknown as BetterSqlite3Constructor)) ?? null;
+
+    if (typeof ctor !== 'function') {
+      throw new Error('better-sqlite3 did not export a constructor function');
+    }
+
+    cachedConstructor = ctor;
+    return ctor;
+  } catch (error) {
+    throw enrichNativeBindingError(error);
+  }
+}
+
+function enrichNativeBindingError(error: unknown): Error {
+  if (!(error instanceof Error)) {
+    return new Error(`Failed to load better-sqlite3: ${String(error)}`);
+  }
+
+  const code = (error as NodeJS.ErrnoException).code ?? '';
+  const message = error.message ?? '';
+  const abiMismatch =
+    code === 'ERR_DLOPEN_FAILED' ||
+    message.includes('ABI mismatch') ||
+    message.includes('NODE_MODULE_VERSION') ||
+    message.includes('was compiled against a different Node.js version');
+
+  if (!abiMismatch) {
+    return error;
+  }
+
+  const hint = [
+    'better-sqlite3 native bindings failed to load.',
+    'This usually happens after upgrading Node.js without rebuilding dependencies.',
+    'Run `pnpm rebuild better-sqlite3` (or reinstall dependencies) to compile the module for your current Node runtime.',
+    'Apple Silicon tip: run the rebuild from an arm64 shell (e.g. `arch -arm64 zsh`) so the binary matches your terminal architecture.',
+  ].join(' ');
+
+  const enhanced = new Error(`${hint} Original error: ${message}`);
+  (enhanced as Error & { cause?: unknown }).cause = error;
+  return enhanced;
+}
 
 /**
  * Initialize and return the shared database connection.
@@ -109,7 +163,8 @@ export async function initializeDatabase(): Promise<Database> {
       mkdirSync(dbDir, { recursive: true });
     }
 
-    const sqliteDb = new DatabaseConstructor(dbPath, {
+    const DatabaseConstructor = await loadBetterSqlite();
+    const sqliteDb = DatabaseConstructor(dbPath, {
       fileMustExist: false,
       timeout: 5000,
     });
@@ -252,9 +307,22 @@ function initializeSchema(db: Database): void {
     `);
 
     db.run('CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);');
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_updates (
+        id INTEGER PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        parent_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+        update_text TEXT NOT NULL,
+        acknowledged INTEGER NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    db.run('CREATE INDEX IF NOT EXISTS idx_agent_updates_parent ON agent_updates(parent_session_id, acknowledged);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_agent_updates_session ON agent_updates(session_id);');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to initialize database schema: ${message}`);
   }
 }
-

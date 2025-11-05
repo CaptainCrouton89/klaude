@@ -91,3 +91,16 @@ export interface Event {
   payload_json: string | null;
   created_at: string;
 }
+
+/**
+ * Agent update entity
+ * Stores updates pushed by agents to their parents via [UPDATE] messages
+ */
+export interface AgentUpdate {
+  id: number;
+  session_id: string;
+  parent_session_id: string | null;
+  update_text: string;
+  acknowledged: boolean;
+  created_at: string;
+}
