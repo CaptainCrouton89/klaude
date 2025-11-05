@@ -37,6 +37,7 @@ pnpm run lint           # eslint
 - `claude_session_links` – Maps Klaude→Claude session IDs (enables `--resume`)
 - `runtime_process` – Agent subprocess PIDs
 - `events` – Event stream (all agent activity)
+- `agent_updates` – Push notifications from agents to parents (via `[UPDATE]` messages)
 
 **Session Lifecycle:**
 1. User runs `klaude start <agent> <prompt>` → CLI sends IPC request
@@ -48,11 +49,12 @@ pnpm run lint           # eslint
 
 ## Core Files
 
-**Commands** (`src/commands/`): `start.ts`, `checkout.ts`, `wait.ts`, `status.ts`, `message.ts`, `interrupt.ts`, `sessions.ts`, `logs.ts`, `instances.ts`, `setup-hooks.ts`
+**Commands** (`src/commands/`): `start.ts`, `checkout.ts`, `wait.ts`, `status.ts`, `message.ts`, `interrupt.ts`, `sessions.ts`, `logs.ts`, `instances.ts`, `setup-hooks.ts`, `watch.ts`
 
 **Services** (`src/services/`):
 - `wrapper-instance.ts` – Socket server, Claude spawn/kill, session checkout
 - `agent-definitions.ts` – Parse agent markdown YAML frontmatter
+- `update-watcher.ts` – Programmatic API for consuming push updates
 - `session-log.ts`, `mcp-loader.ts`, `mcp-resolver.ts`, `project-context.ts`, `instance-client.ts`, `instance-registry.ts`
 
 **Runtime** (`src/runtime/`): `agent-runtime.ts`
@@ -94,6 +96,13 @@ pnpm run lint           # eslint
 - Runtime writes newline-delimited JSON events to stdout
 - Event types: `status`, `message`, `log`, `result`, `error`, `claude-session`, `done`
 - `claude-session` event triggers immediate DB link creation
+
+**Push Notifications** (`update-watcher.ts`, `wrapper-instance.ts`):
+- Agents emit `[UPDATE] <message>` patterns in output
+- Wrapper detects and stores updates in `agent_updates` table
+- Parents poll via `klaude watch <session-id>` command or `UpdateWatcher` service
+- Supports regex filtering and optional read acknowledgment
+- Database-backed (eventual consistency model)
 
 ## Notes
 
