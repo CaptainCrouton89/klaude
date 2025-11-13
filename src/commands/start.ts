@@ -73,8 +73,6 @@ export function registerStartCommand(program: Command): void {
           if (runtimeKind === 'claude') {
             console.log(`  - Enter TUI:     klaude checkout ${abbrevId}`);
             console.log(`  - Message:       klaude message ${abbrevId} "<prompt>" --timeout 5`);
-          } else {
-            console.log(`  - Rerun prompt:  klaude start ${result.agentType} "<prompt>"`);
           }
           console.log(`  - Interrupt:     klaude interrupt ${abbrevId}`);
           if (runtimeKind === 'cursor') {
