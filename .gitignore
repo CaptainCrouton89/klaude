@@ -6,3 +6,5 @@ docs/investigations/
 UX_GAP_ANALYSIS.md
 .mcp.json
 test-query.js
+DEBUG_*.md
+todo.md
