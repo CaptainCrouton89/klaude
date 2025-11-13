@@ -22,5 +22,10 @@ export const DEFAULT_CONFIG: KlaudeConfig = {
     switch: {
       graceSeconds: 1,
     },
+    cursor: {
+      startupRetries: 3,
+      startupRetryDelayMs: 400,
+      startupRetryJitterMs: 200,
+    },
   },
 };

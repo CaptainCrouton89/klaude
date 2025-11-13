@@ -51,6 +51,11 @@ export interface KlaudeConfig {
     switch?: {
       graceSeconds?: number;
     };
+    cursor?: {
+      startupRetries?: number;
+      startupRetryDelayMs?: number;
+      startupRetryJitterMs?: number;
+    };
   };
 }
 

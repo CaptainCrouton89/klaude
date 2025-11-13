@@ -284,6 +284,14 @@ interface AgentRuntimeState {
   logPath: string;
   detached: boolean;
   runtimeKind: 'claude' | 'cursor';
+  cursorMeta?: {
+    attempts: number;
+    maxAttempts: number;
+    pendingRetryTimer: NodeJS.Timeout | null;
+    cancelled: boolean;
+    awaitingRetry: boolean;
+    lastExitStatus?: 'done' | 'failed' | 'interrupted';
+  };
 }
 
 export async function startWrapperInstance(options: WrapperStartOptions = {}): Promise<void> {
@@ -809,6 +817,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     sessionId: string,
     exitInfo: ClaudeExitResult,
     runtimeState: AgentRuntimeState,
+    options?: { skipSessionFinalization?: boolean; eventExtras?: Record<string, unknown> },
   ): Promise<void> {
     updateSessionProcessPid(sessionId, null);
 
@@ -818,7 +827,10 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     const inferredStatus = mapExitToStatus(exitInfo);
 
-    if (runtimeState.status === 'pending' || runtimeState.status === 'running') {
+    if (
+      !options?.skipSessionFinalization &&
+      (runtimeState.status === 'pending' || runtimeState.status === 'running')
+    ) {
       updateSessionStatus(sessionId, inferredStatus);
       markSessionEnded(sessionId, inferredStatus);
       runtimeState.status = inferredStatus;
@@ -828,6 +840,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       code: exitInfo.code,
       signal: exitInfo.signal ?? null,
       inferredStatus,
+      ...(options?.eventExtras ?? {}),
     });
   }
 
@@ -1043,49 +1056,47 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       wrapperConfig.projectsDir,
     );
 
-    const cursorArgs = ['-p', '--output-format', 'stream-json'];
-
-    // Add --force if SDK permission mode bypasses permissions
     const sdkPermissionMode = config.sdk?.permissionMode ?? 'bypassPermissions';
+    const baseCursorArgs = ['-p', '--output-format', 'stream-json'];
+
     if (sdkPermissionMode === 'bypassPermissions') {
-      cursorArgs.push('--force');
+      baseCursorArgs.push('--force');
     }
 
     const modelOverride = agentDefinition?.model;
     if (modelOverride && modelOverride.trim().length > 0) {
-      cursorArgs.push('--model', modelOverride);
+      baseCursorArgs.push('--model', modelOverride);
     }
-    cursorArgs.push('--');
 
-    // For cursor agents, prepend agent instructions to the prompt with separator
     const cursorPrompt = agentDefinition?.instructions
       ? `${agentDefinition.instructions}\n\n---\n\n${payload.prompt}`
       : payload.prompt;
-    cursorArgs.push(cursorPrompt);
+
+    const resolvedCursorArgs = [...baseCursorArgs, '--', cursorPrompt];
 
     const fullSessionId = session.id;
     const shortSessionId = abbreviateSessionId(fullSessionId);
 
-    const child = spawn('cursor-agent', cursorArgs, {
-      cwd: context.projectRoot,
-      env: {
-        ...process.env,
-        KLAUDE_PROJECT_HASH: context.projectHash,
-        KLAUDE_INSTANCE_ID: instanceId,
-        KLAUDE_SESSION_ID: fullSessionId,
-        KLAUDE_SESSION_ID_SHORT: shortSessionId,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const cursorRetryConfig = wrapperConfig.cursor ?? {};
+    const maxStartupAttempts = Math.max(1, cursorRetryConfig.startupRetries ?? 3);
+    const retryDelayMs = Math.max(0, cursorRetryConfig.startupRetryDelayMs ?? 400);
+    const retryJitterMs = Math.max(0, cursorRetryConfig.startupRetryJitterMs ?? 200);
 
     const runtimeState: AgentRuntimeState = {
       sessionId: session.id,
-      process: child,
+      process: null as unknown as ChildProcess,
       runtimeProcessId: null,
       status: 'pending',
       logPath: sessionLogPath,
       detached: Boolean(payload.options?.detach),
       runtimeKind: 'cursor',
+      cursorMeta: {
+        attempts: 0,
+        maxAttempts: maxStartupAttempts,
+        pendingRetryTimer: null,
+        cancelled: false,
+        awaitingRetry: false,
+      },
     };
 
     agentRuntimes.set(session.id, runtimeState);
@@ -1095,50 +1106,30 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       void handleAgentRuntimeEvent(session.id, event, runtimeState);
     };
 
-    forwardRuntimeEvent({
-      type: 'status',
-      status: 'starting',
-      detail: 'Launching cursor-agent runtime',
-    });
+    const computeRetryDelay = (nextAttempt: number): number => {
+      const multiplier = Math.max(1, nextAttempt - 1);
+      const jitter = retryJitterMs > 0 ? Math.floor(Math.random() * retryJitterMs) : 0;
+      return retryDelayMs * multiplier + jitter;
+    };
 
-    child.once('spawn', async () => {
-      if (!child.pid) {
-        debugLog(`[cursor-runtime-spawn-no-pid] sessionId=${session.id}`);
-        return;
-      }
-      debugLog(`[cursor-runtime-spawned] sessionId=${session.id}, pid=${child.pid}`);
-      const runtimeProcess = createRuntimeProcess(session.id, child.pid, 'cursor', true);
-      runtimeState.runtimeProcessId = runtimeProcess.id;
-      updateSessionProcessPid(session.id, child.pid);
-      updateSessionStatus(session.id, 'running');
-      runtimeState.status = 'running';
-
-      await recordSessionEvent(session.id, 'agent.runtime.spawned', {
-        pid: child.pid,
-        detached: runtimeState.detached,
-        agentType,
-        definitionName: agentDefinition?.name ?? null,
-        definitionScope: agentDefinition?.scope ?? null,
-        runtimeKind: runtimeState.runtimeKind,
+    const emitStartupStatus = (attempt: number): void => {
+      const detail =
+        attempt === 1
+          ? 'Launching cursor-agent runtime'
+          : `Restarting cursor-agent runtime (attempt ${attempt}/${maxStartupAttempts})`;
+      forwardRuntimeEvent({
+        type: 'status',
+        status: 'starting',
+        detail,
       });
-    });
-
-    child.once('error', async (error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      debugLog(`[cursor-runtime-error] sessionId=${session.id}, error=${message}`);
-      try {
-        await recordSessionEvent(session.id, 'agent.runtime.process.error', {
-          message,
-          runtime: 'cursor',
+      if (attempt > 1) {
+        forwardRuntimeEvent({
+          type: 'log',
+          level: 'info',
+          message: `cursor-agent restart attempt ${attempt}/${maxStartupAttempts}`,
         });
-      } catch (recordError) {
-        const recordMsg = recordError instanceof Error ? recordError.message : String(recordError);
-        console.error(`[cursor-runtime-error-record-failed] ${recordMsg}`);
       }
-      updateSessionStatus(session.id, 'failed');
-      markSessionEnded(session.id, 'failed');
-      runtimeState.status = 'failed';
-    });
+    };
 
     function extractCursorText(event: Record<string, unknown>): string | null {
       const message = event.message;
@@ -1253,84 +1244,208 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       return events;
     }
 
-    child.stdout?.setEncoding('utf8');
-    let stdoutBuffer = '';
-    child.stdout?.on('data', (chunk: string) => {
-      stdoutBuffer += chunk;
-      let newlineIndex = stdoutBuffer.indexOf('\n');
-      while (newlineIndex >= 0) {
-        const line = stdoutBuffer.slice(0, newlineIndex).trim();
-        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-        if (line.length > 0) {
-          try {
-            const parsed = JSON.parse(line) as unknown;
-            const events = mapCursorEvent(parsed);
-            if (events.length === 0) {
-              void recordSessionEvent(session.id, 'agent.runtime.event.unknown', parsed);
-            } else {
-              for (const event of events) {
-                forwardRuntimeEvent(event);
+    const launchCursorAttempt = (attempt: number): void => {
+      if (runtimeState.cursorMeta?.cancelled) {
+        debugLog(`[cursor-runtime-cancelled] sessionId=${session.id}, attempt=${attempt}`);
+        return;
+      }
+
+      runtimeState.cursorMeta!.attempts = attempt;
+      runtimeState.cursorMeta!.pendingRetryTimer = null;
+      runtimeState.cursorMeta!.awaitingRetry = false;
+
+      emitStartupStatus(attempt);
+
+      const child = spawn('cursor-agent', resolvedCursorArgs, {
+        cwd: context.projectRoot,
+        env: {
+          ...process.env,
+          KLAUDE_PROJECT_HASH: context.projectHash,
+          KLAUDE_INSTANCE_ID: instanceId,
+          KLAUDE_SESSION_ID: fullSessionId,
+          KLAUDE_SESSION_ID_SHORT: shortSessionId,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      runtimeState.process = child;
+      runtimeState.runtimeProcessId = null;
+
+      let observedCursorOutput = false;
+
+      child.once('spawn', async () => {
+        if (!child.pid) {
+          debugLog(`[cursor-runtime-spawn-no-pid] sessionId=${session.id}`);
+          return;
+        }
+        debugLog(`[cursor-runtime-spawned] sessionId=${session.id}, pid=${child.pid}`);
+        const runtimeProcess = createRuntimeProcess(session.id, child.pid, 'cursor', true);
+        runtimeState.runtimeProcessId = runtimeProcess.id;
+        updateSessionProcessPid(session.id, child.pid);
+        updateSessionStatus(session.id, 'running');
+        runtimeState.status = 'running';
+
+        await recordSessionEvent(session.id, 'agent.runtime.spawned', {
+          pid: child.pid,
+          detached: runtimeState.detached,
+          agentType,
+          definitionName: agentDefinition?.name ?? null,
+          definitionScope: agentDefinition?.scope ?? null,
+          runtimeKind: runtimeState.runtimeKind,
+          attempt,
+        });
+      });
+
+      child.once('error', async (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        debugLog(`[cursor-runtime-error] sessionId=${session.id}, error=${message}`);
+        try {
+          await recordSessionEvent(session.id, 'agent.runtime.process.error', {
+            message,
+            runtime: 'cursor',
+          });
+        } catch (recordError) {
+          const recordMsg =
+            recordError instanceof Error ? recordError.message : String(recordError);
+          console.error(`[cursor-runtime-error-record-failed] ${recordMsg}`);
+        }
+        updateSessionStatus(session.id, 'failed');
+        markSessionEnded(session.id, 'failed');
+        runtimeState.status = 'failed';
+      });
+
+      child.stdout?.setEncoding('utf8');
+      let stdoutBuffer = '';
+      child.stdout?.on('data', (chunk: string) => {
+        observedCursorOutput = true;
+        stdoutBuffer += chunk;
+        let newlineIndex = stdoutBuffer.indexOf('\n');
+        while (newlineIndex >= 0) {
+          const line = stdoutBuffer.slice(0, newlineIndex).trim();
+          stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+          if (line.length > 0) {
+            try {
+              const parsed = JSON.parse(line) as unknown;
+              const events = mapCursorEvent(parsed);
+              if (events.length === 0) {
+                void recordSessionEvent(session.id, 'agent.runtime.event.unknown', parsed);
+              } else {
+                for (const event of events) {
+                  forwardRuntimeEvent(event);
+                }
               }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              void recordSessionEvent(session.id, 'agent.runtime.event.parse_error', {
+                line,
+                message,
+                source: 'cursor-agent',
+              });
             }
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            void recordSessionEvent(session.id, 'agent.runtime.event.parse_error', {
-              line,
-              message,
-              source: 'cursor-agent',
+          }
+          newlineIndex = stdoutBuffer.indexOf('\n');
+        }
+      });
+
+      child.stdout?.on('end', () => {
+        const remaining = stdoutBuffer.trim();
+        if (remaining.length > 0) {
+          void recordSessionEvent(session.id, 'agent.runtime.stdout.trailing', {
+            data: remaining,
+          });
+        }
+        stdoutBuffer = '';
+      });
+
+      child.stderr?.setEncoding('utf8');
+      let stderrBuffer = '';
+      child.stderr?.on('data', (chunk: string) => {
+        observedCursorOutput = true;
+        stderrBuffer += chunk;
+        let newlineIndex = stderrBuffer.indexOf('\n');
+        while (newlineIndex >= 0) {
+          const line = stderrBuffer.slice(0, newlineIndex);
+          stderrBuffer = stderrBuffer.slice(newlineIndex + 1);
+          const data = line.trim();
+          if (data.length > 0) {
+            void recordSessionEvent(session.id, 'agent.runtime.stderr', {
+              data,
+              runtime: 'cursor',
             });
           }
+          newlineIndex = stderrBuffer.indexOf('\n');
         }
-        newlineIndex = stdoutBuffer.indexOf('\n');
-      }
-    });
+      });
 
-    child.stdout?.on('end', () => {
-      const remaining = stdoutBuffer.trim();
-      if (remaining.length > 0) {
-        void recordSessionEvent(session.id, 'agent.runtime.stdout.trailing', {
-          data: remaining,
-        });
-      }
-      stdoutBuffer = '';
-    });
-
-    child.stderr?.setEncoding('utf8');
-    let stderrBuffer = '';
-    child.stderr?.on('data', (chunk: string) => {
-      stderrBuffer += chunk;
-      let newlineIndex = stderrBuffer.indexOf('\n');
-      while (newlineIndex >= 0) {
-        const line = stderrBuffer.slice(0, newlineIndex);
-        stderrBuffer = stderrBuffer.slice(newlineIndex + 1);
-        const data = line.trim();
-        if (data.length > 0) {
+      child.stderr?.on('end', () => {
+        const remaining = stderrBuffer.trim();
+        if (remaining.length > 0) {
           void recordSessionEvent(session.id, 'agent.runtime.stderr', {
-            data,
+            data: remaining,
             runtime: 'cursor',
           });
         }
-        newlineIndex = stderrBuffer.indexOf('\n');
-      }
-    });
-
-    child.stderr?.on('end', () => {
-      const remaining = stderrBuffer.trim();
-      if (remaining.length > 0) {
-        void recordSessionEvent(session.id, 'agent.runtime.stderr', {
-          data: remaining,
-          runtime: 'cursor',
-        });
-      }
-      stderrBuffer = '';
-    });
-
-    child.once('exit', (code, signal) => {
-      const exitInfo: ClaudeExitResult = { code, signal };
-      void handleAgentRuntimeExit(session.id, exitInfo, runtimeState).finally(() => {
-        agentRuntimes.delete(session.id);
+        stderrBuffer = '';
       });
-    });
+
+      child.once('exit', (code, signal) => {
+        const exitInfo: ClaudeExitResult = { code, signal };
+        const inferredStatus = mapExitToStatus(exitInfo);
+        const wasStartupFailure = !observedCursorOutput;
+        const hasAttemptsRemaining = attempt < maxStartupAttempts;
+        const cancelled = runtimeState.cursorMeta?.cancelled ?? false;
+        const shouldRetry = wasStartupFailure && hasAttemptsRemaining && !cancelled;
+
+        void (async () => {
+          await handleAgentRuntimeExit(session.id, exitInfo, runtimeState, {
+            skipSessionFinalization: shouldRetry,
+            eventExtras: { attempt },
+          });
+
+          if (shouldRetry) {
+            const nextAttempt = attempt + 1;
+            const delay = computeRetryDelay(nextAttempt);
+            if (runtimeState.cursorMeta) {
+              runtimeState.cursorMeta.awaitingRetry = true;
+              runtimeState.cursorMeta.lastExitStatus = inferredStatus;
+            }
+            debugLog(
+              `[cursor-runtime-retry] sessionId=${session.id}, nextAttempt=${nextAttempt}, delay=${delay}ms`,
+            );
+            if (runtimeState.cursorMeta) {
+              runtimeState.cursorMeta.pendingRetryTimer = setTimeout(() => {
+                runtimeState.cursorMeta!.pendingRetryTimer = null;
+                launchCursorAttempt(nextAttempt);
+              }, delay);
+              const timer = runtimeState.cursorMeta.pendingRetryTimer;
+              if (timer && typeof timer.unref === 'function') {
+                timer.unref();
+              }
+            } else {
+              launchCursorAttempt(nextAttempt);
+            }
+            await recordSessionEvent(session.id, 'agent.runtime.retry', {
+              runtime: 'cursor',
+              attempt,
+              nextAttempt,
+              maxAttempts: maxStartupAttempts,
+              delayMs: delay,
+              reason: 'cursor_startup_no_output',
+            });
+          } else {
+            agentRuntimes.delete(session.id);
+          }
+        })().catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(
+            `[cursor-runtime-exit-handler-error] sessionId=${session.id}, error=${message}`,
+          );
+          agentRuntimes.delete(session.id);
+        });
+      });
+    };
+
+    launchCursorAttempt(1);
   }
   async function waitForClaudeSessionId(
     sessionId: string,
@@ -1445,6 +1560,30 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     const runtime = agentRuntimes.get(sessionId);
     if (!runtime) {
       return false;
+    }
+
+    if (runtime.cursorMeta) {
+      runtime.cursorMeta.cancelled = true;
+      if (runtime.cursorMeta.pendingRetryTimer) {
+        clearTimeout(runtime.cursorMeta.pendingRetryTimer);
+        runtime.cursorMeta.pendingRetryTimer = null;
+      }
+      if (runtime.cursorMeta.awaitingRetry) {
+        runtime.cursorMeta.awaitingRetry = false;
+        const fallbackStatus = runtime.cursorMeta.lastExitStatus ?? 'failed';
+        updateSessionStatus(sessionId, fallbackStatus);
+        markSessionEnded(sessionId, fallbackStatus);
+        runtime.status = fallbackStatus;
+        agentRuntimes.delete(sessionId);
+        await recordSessionEvent(sessionId, 'agent.runtime.retry.cancelled', {
+          runtime: runtime.runtimeKind,
+          status: fallbackStatus,
+        });
+        debugLog(
+          `[runtime-stop] sessionId=${sessionId}, cancelled pending cursor restart (status=${fallbackStatus})`,
+        );
+        return true;
+      }
     }
 
     const normalizedWait =

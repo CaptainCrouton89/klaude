@@ -107,16 +107,24 @@ function mergeConfig(defaults: KlaudeConfig, partial: Partial<KlaudeConfig>): Kl
   const wrapperConfig = {
     ...wrapperDefaults,
     switch: wrapperDefaults?.switch ? { ...wrapperDefaults.switch } : undefined,
+    cursor: wrapperDefaults?.cursor ? { ...wrapperDefaults.cursor } : undefined,
   } as KlaudeConfig['wrapper'];
 
   if (partial.wrapper) {
-    const { switch: partialSwitch, ...restWrapper } = partial.wrapper;
+    const { switch: partialSwitch, cursor: partialCursor, ...restWrapper } = partial.wrapper;
     Object.assign(wrapperConfig!, restWrapper);
 
     if (partialSwitch) {
       wrapperConfig!.switch = {
         ...(wrapperConfig!.switch ?? {}),
         ...partialSwitch,
+      };
+    }
+
+    if (partialCursor) {
+      wrapperConfig!.cursor = {
+        ...(wrapperConfig!.cursor ?? {}),
+        ...partialCursor,
       };
     }
   }
