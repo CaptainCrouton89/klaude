@@ -1,7 +1,6 @@
 import { requestCheckout, startAgentSession } from '@/services/instance-client.js';
 import { resolveInstanceForProject } from '@/services/instance-selection.js';
 import { prepareProjectContext } from '@/services/project-context.js';
-import { tailSessionLog } from '@/services/session-log.js';
 import { resolveProjectDirectory, abbreviateSessionId } from '@/utils/cli-helpers.js';
 import { KlaudeError, printError } from '@/utils/error-handler.js';
 import { Command, OptionValues } from 'commander';
@@ -19,7 +18,6 @@ export function registerStartCommand(program: Command): void {
     .argument('[agentCount]', 'Optional agent count for fan-out requests')
     .option('-c, --checkout', 'Request immediate checkout after start')
     .option('-s, --share', 'Share current context with the new agent')
-    .option('-a, --attach', 'Attach to agent stream (blocks until completion)')
     .option('-v, --verbose', 'Verbose: print debug details (instance, log path)')
     .option('--instance <id>', 'Target instance id')
     .option('-C, --cwd <path>', 'Project directory override')
@@ -65,8 +63,8 @@ export function registerStartCommand(program: Command): void {
           console.log(`Log: ${result.logPath}`);
         }
 
-        // By default, print concise, agent-friendly hints (but not in attach mode)
-        if (!options.verbose && !options.attach) {
+        // By default, print concise, agent-friendly hints
+        if (!options.verbose) {
           console.log(`session: ${abbrevId} (agent=${result.agentType})`);
           console.log('Next steps:');
           console.log(`  - Tail output:   klaude logs ${abbrevId} -f`);
@@ -86,7 +84,6 @@ export function registerStartCommand(program: Command): void {
 
         const requestedCheckout = Boolean(payload.options?.checkout);
         const checkoutSupported = runtimeKind === 'claude';
-        let checkoutPerformed = false;
 
         if (requestedCheckout && !checkoutSupported) {
           console.log('Checkout is not supported for cursor-backed agents; ignoring --checkout.');
@@ -101,23 +98,12 @@ export function registerStartCommand(program: Command): void {
             throw new KlaudeError(checkoutResponse.error.message, checkoutResponse.error.code);
           }
           const checkoutResult = checkoutResponse.result;
-          checkoutPerformed = true;
           if (options.verbose) {
             console.log(
               `Checkout activated for session ${abbreviateSessionId(checkoutResult.sessionId)} (resume ${checkoutResult.claudeSessionId}).`,
             );
           } else {
             console.log(`session: ${abbreviateSessionId(checkoutResult.sessionId)} (entered via resume)`);
-          }
-        }
-        // Attach only if explicitly requested
-        if (options.attach && !checkoutPerformed) {
-          await tailSessionLog(result.logPath, { untilExit: true, raw: Boolean(options.verbose) });
-          // Print session metadata after completion for easy reference
-          if (!options.verbose) {
-            console.log(`\nsession: ${abbrevId}`);
-            console.log(`  - Check out:               klaude checkout ${abbrevId}`);
-            console.log(`  - Send follow-up message:  klaude message ${abbrevId} "<prompt>"`);
           }
         }
       } catch (error) {

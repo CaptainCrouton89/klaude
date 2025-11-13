@@ -190,11 +190,8 @@ To start a task, use:
   klaude start ${agentType} "${promptPreview}..." [options]
 
 Available options:
-  --attach    Attach to agent in foreground (blocks until complete). Use this when the task is a dependency for a known next step.
   --checkout  Request immediate checkout after start (enter interactive TUI).
-  --share     Share current context with the new agent.
-
-Note: By default, agents run in background. Use --attach when you need to wait for results.`,
+  --share     Share current context with the new agent.`,
             },
           };
           process.stdout.write(JSON.stringify(response) + '\n');

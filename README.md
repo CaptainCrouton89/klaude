@@ -97,6 +97,20 @@ The wrapper handles session switching seamlessly. When agents run, Klaude record
 
 `~/.klaude/config.yaml` has setting `wrapper.claudeBinary`. The default points to `/opt/homebrew/bin/claude`.
 
+### Cursor Runtime Retries
+
+`cursor-agent` occasionally exits early when several Composer agents start at once. Klaude now retries these startup failures automatically (default: 3 attempts with a short backoff). You can tune this behaviour in `~/.klaude/config.yaml`:
+
+```yaml
+wrapper:
+  cursor:
+    startupRetries: 3          # total attempts, including the first launch
+    startupRetryDelayMs: 400   # base delay before the next attempt
+    startupRetryJitterMs: 200  # random jitter to stagger concurrent restarts
+```
+
+Set `startupRetries` to `1` to disable retries entirely.
+
 ## Architecture
 
 **User runs `klaude` with no args** → Wrapper spawns Claude Code subprocess → User interacts with Claude normally, but can now spawn/manage agents
@@ -130,7 +144,6 @@ Commands:
     Options:
       -c, --checkout       Checks out the agent immediately after starting
       -s, --share          Shares current context (last X messages) with the new agent
-      -a, --attach         Attach to agent stream in foreground (blocks until completion)
       -v, --verbose        Show detailed debug information
       --instance <id>      Target specific wrapper instance
     Returns: The process and session ID of the started agent.

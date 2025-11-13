@@ -17,7 +17,7 @@ Special internal hook commands invoked by Claude via configured hooks:
 
 - **session-start** – Links Claude session ID to Klaude session in DB (enables `--resume` checkout)
 - **session-end** – Cleans up session state when Claude exits
-- **task** – Blocks Task tool in Klaude sessions, redirects to `klaude start` with options (`--attach`, `--checkout`, `--share`). Exempts `Plan` and `Explore` agents (allowed to use native Task tool)
+- **task** – Blocks Task tool in Klaude sessions, redirects to `klaude start` with options (`--checkout`, `--share`). Exempts `Plan` and `Explore` agents (allowed to use native Task tool)
 - **pre-user-message** – Detects `@agent-` pattern in user messages, delegates to agent system
 - **post-tool-use-updates** – Queries pending child agent updates after every tool use and injects them as context. Matches all tools via `*` matcher. Auto-acknowledges updates after injection.
 
