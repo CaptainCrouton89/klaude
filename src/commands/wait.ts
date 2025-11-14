@@ -158,7 +158,7 @@ export function registerWaitCommand(program: Command): void {
               // ANY: Return if at least one session is terminal
               const anyTerminal = statuses.some((status) => status && isTerminal(status));
               if (anyTerminal) {
-                console.log('\n✅ At least one session completed\n');
+                console.log(); // blank line before summaries
                 for (let i = 0; i < resolvedSessionIds.length; i++) {
                   const status = statuses[i];
                   if (status && isTerminal(status)) {
@@ -177,7 +177,7 @@ export function registerWaitCommand(program: Command): void {
               // ALL: Return if all sessions are terminal
               const allTerminal = statuses.every((status) => status && isTerminal(status));
               if (allTerminal) {
-                console.log('\n✅ All sessions completed\n');
+                console.log(); // blank line before summaries
                 for (let i = 0; i < resolvedSessionIds.length; i++) {
                   await displaySessionSummary(
                     resolvedSessionIds[i],
