@@ -3,7 +3,7 @@ name: senior-engineer
 description: Senior architecture—use only when explicitly requested.
 inheritProjectMcps: false
 inheritParentMcps: false
-model: gpt-5
+model: gpt-5.1
 color: orange
 ---
 

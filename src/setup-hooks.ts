@@ -4,6 +4,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
 const AGENTS_DIR = path.join(os.homedir(), '.claude', 'agents');
@@ -124,7 +127,8 @@ function promptUser(question: string): Promise<boolean> {
 
 function copyBuiltinAgents(): void {
   // Get the path to built-in agents (in the npm package)
-  const builtinAgentsDir = path.join(__dirname, '..', '..', 'agents');
+  // __dirname is dist/, parent is klaude/
+  const builtinAgentsDir = path.join(__dirname, '..', 'agents');
 
   // Create agents directory if it doesn't exist
   if (!fs.existsSync(AGENTS_DIR)) {
