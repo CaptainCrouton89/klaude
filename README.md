@@ -214,15 +214,21 @@ klaude message <id> <prompt> [options]
 - `--instance <id>` — Target specific wrapper instance
 
 #### `klaude interrupt`
-Interrupts the specified agent's current operation.
+Interrupts one or more agent sessions' current operation.
 
 ```bash
-klaude interrupt <id>
+klaude interrupt <id...>
 ```
 
 **Options:**
 - `--signal <signal>` — Signal to send (default: SIGINT)
 - `--instance <id>` — Target specific wrapper instance
+
+**Examples:**
+```bash
+klaude interrupt abc123                    # Interrupt single session
+klaude interrupt abc123 def456 ghi789      # Interrupt multiple sessions
+```
 
 #### `klaude sessions`
 Views active klaude sessions, showing a brief description, first, and last message for each.
