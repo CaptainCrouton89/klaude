@@ -1833,9 +1833,10 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       if (!claudeSessionId) {
         // Hook failed to fire - this is a critical error
         throw new KlaudeError(
-          `Claude session hook did not fire within ${hookWaitSeconds}s. ` +
-          `Ensure SessionStart hook is installed in ~/.claude/settings.json. ` +
-          `Required config:\n` +
+          `Claude session hook did not fire within ${hookWaitSeconds}s.\n\n` +
+          `Run the following command to automatically install hooks:\n` +
+          `  klaude setup-hooks\n\n` +
+          `Or manually add to ~/.claude/settings.json:\n` +
           `{\n  "hooks": {\n    "SessionStart": [{ "hooks": [{ "type": "command", "command": "klaude hook session-start" }] }],\n` +
           `    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "klaude hook session-end" }] }]\n  }\n}`,
           'E_HOOK_TIMEOUT',
