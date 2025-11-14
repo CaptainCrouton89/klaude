@@ -37,10 +37,16 @@ export function registerStartCommand(program: Command): void {
           throw new KlaudeError('Agent count must be numeric', 'E_INVALID_AGENT_COUNT');
         }
 
+        const envParentSessionId = process.env.KLAUDE_SESSION_ID;
+        const parentSessionId = envParentSessionId && envParentSessionId.trim().length > 0
+          ? envParentSessionId
+          : undefined;
+
         const payload = {
           agentType,
           prompt,
           agentCount,
+          parentSessionId,
           options: {
             checkout: Boolean(options.checkout),
             share: Boolean(options.share),
