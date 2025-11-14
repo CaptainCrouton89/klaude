@@ -193,7 +193,7 @@ export async function handleSessionStartHook(payload: ClaudeHookPayload): Promis
     await debugLog(`════════════════════════════════════════════════════════════`);
 
     // Inject welcome message explaining klaude usage
-    const welcomeMessage = `The Task tool has been replaced with \`klaude\`. It's more powerful than the Task tool since the spawned agents are non-blocking; you can continue your own work while the agent works in the background. Always use klaude instead of the Task tool.
+    const welcomeMessage = `The Task tool has been replaced with \`klaude\`. It's more powerful than the Task tool since the spawned agents are non-blocking; you can continue your own work while the agent works in the background. Always use klaude instead of the Task tool. Any agent type compatible with the Task tool is also compatible with klaude.
 
 To delegate work to specialized agents, use:
   klaude start <agent-type> "<task description>" [options]
