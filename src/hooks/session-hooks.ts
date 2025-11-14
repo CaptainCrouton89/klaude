@@ -65,13 +65,13 @@ function requirePayloadSessionId(payload: ClaudeHookPayload): string {
   return payload.session_id;
 }
 
-export async function handleSessionStartHook(payload: ClaudeHookPayload): Promise<void> {
+export async function handleSessionStartHook(payload: ClaudeHookPayload): Promise<string> {
   const startTime = Date.now();
 
   // Check if we're in a klaude session; if not, gracefully exit
   if (!process.env.KLAUDE_PROJECT_HASH) {
     await debugLog('Not in a klaude session (KLAUDE_PROJECT_HASH not set); exiting gracefully');
-    return;
+    return '';
   }
 
   await debugLog('════════════════════════════════════════════════════════════');
@@ -191,6 +191,29 @@ export async function handleSessionStartHook(payload: ClaudeHookPayload): Promis
     await debugLog(`════════════════════════════════════════════════════════════`);
     await debugLog(`✓ SESSION_START_HOOK COMPLETED (${elapsed}ms)`);
     await debugLog(`════════════════════════════════════════════════════════════`);
+
+    // Inject welcome message explaining klaude usage
+    const welcomeMessage = `The Task tool has been replaced with \`klaude\`. It's more powerful than the Task tool since the spawned agents are non-blocking; you can continue your own work while the agent works in the background. Always use klaude instead of the Task tool.
+
+To delegate work to specialized agents, use:
+  klaude start <agent-type> "<task description>" [options]
+
+Example:
+  klaude start context-engineer "investigate authentication patterns"
+
+Available options:
+  --share     Share current conversation context with the new agent
+  
+Be proactive about using agents to delegate work. For complex or instruction-heavy tasks, investigating, planning, and even implementing can be improved by delegating and parallelizing.`;
+
+    const output = {
+      hookSpecificOutput: {
+        hookEventName: 'SessionStart',
+        additionalContext: welcomeMessage,
+      },
+    };
+
+    return JSON.stringify(output);
   } catch (error) {
     const elapsed = Date.now() - startTime;
     const message = error instanceof Error ? error.message : String(error);

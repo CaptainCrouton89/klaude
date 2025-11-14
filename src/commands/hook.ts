@@ -58,10 +58,15 @@ export function registerHookCommand(program: Command): void {
             );
           }
 
-          await handleSessionStartHook(payload as ClaudeHookPayload);
+          const result = await handleSessionStartHook(payload as ClaudeHookPayload);
 
           const elapsed = Date.now() - startTime;
           logLine(`HOOK SUCCEEDED - elapsed=${elapsed}ms`);
+
+          // Write JSON output to stdout if present
+          if (result) {
+            process.stdout.write(result + '\n');
+          }
         } catch (error) {
           const elapsed = Date.now() - startTime;
           const msg = error instanceof Error ? error.message : String(error);
