@@ -1,5 +1,6 @@
 import { Command, OptionValues } from 'commander';
 import { prepareProjectContext } from '@/services/project-context.js';
+import { loadConfig } from '@/services/config-loader.js';
 import {
   closeDatabase,
   getProjectByHash,
@@ -9,6 +10,8 @@ import {
 import { printError } from '@/utils/error-handler.js';
 import { resolveProjectDirectory, abbreviateSessionId } from '@/utils/cli-helpers.js';
 import { resolveSessionId } from '@/db/models/session.js';
+import { getSessionLogPath } from '@/utils/path-helper.js';
+import { collectCompletionInfo } from '@/services/session-log.js';
 
 /**
  * Terminal session statuses that indicate completion
@@ -20,6 +23,62 @@ const TERMINAL_STATUSES = ['done', 'failed', 'interrupted'] as const;
  */
 function isTerminal(status: string): boolean {
   return TERMINAL_STATUSES.includes(status as typeof TERMINAL_STATUSES[number]);
+}
+
+/**
+ * Format and display completion summary for a session
+ */
+async function displaySessionSummary(
+  sessionId: string,
+  status: string,
+  projectHash: string,
+  projectsDir?: string
+): Promise<void> {
+  const statusIcon = status === 'done' ? '✅' : status === 'failed' ? '❌' : '⚠️';
+  console.log(`${statusIcon} Session ${abbreviateSessionId(sessionId)} → ${status}`);
+
+  // Try to get completion info from log
+  try {
+    const logPath = getSessionLogPath(projectHash, sessionId, projectsDir);
+    const info = await collectCompletionInfo(logPath);
+
+    // Display file changes first
+    const hasFileChanges = info.filesEdited.length > 0 || info.filesCreated.length > 0;
+    if (hasFileChanges) {
+      console.log(); // blank line before file list
+      if (info.filesEdited.length > 0) {
+        console.log('Edited:');
+        for (const file of info.filesEdited) {
+          console.log(file);
+        }
+        if (info.filesCreated.length > 0) {
+          console.log(); // blank line between lists
+        }
+      }
+      if (info.filesCreated.length > 0) {
+        console.log('Created:');
+        for (const file of info.filesCreated) {
+          console.log(file);
+        }
+      }
+    }
+
+    // Display error or final response
+    if (info.error) {
+      console.log();
+      console.log(`Error: ${info.error.split('\n')[0]}`); // First line only
+    } else if (info.finalText) {
+      console.log();
+      // Truncate long responses to ~500 chars
+      const truncated = info.finalText.length > 500
+        ? info.finalText.slice(0, 500) + '...'
+        : info.finalText;
+      console.log(truncated);
+    }
+  } catch {
+    // Silently fall back to status-only display if log parsing fails
+    // (warning already printed above with status)
+  }
 }
 
 /**
@@ -39,6 +98,7 @@ export function registerWaitCommand(program: Command): void {
       try {
         const projectCwd = resolveProjectDirectory(options.cwd);
         const context = await prepareProjectContext(projectCwd);
+        const config = await loadConfig();
         await initializeDatabase();
 
         try {
@@ -98,11 +158,17 @@ export function registerWaitCommand(program: Command): void {
               // ANY: Return if at least one session is terminal
               const anyTerminal = statuses.some((status) => status && isTerminal(status));
               if (anyTerminal) {
-                console.log('\n✅ At least one session completed');
+                console.log('\n✅ At least one session completed\n');
                 for (let i = 0; i < resolvedSessionIds.length; i++) {
                   const status = statuses[i];
                   if (status && isTerminal(status)) {
-                    console.log(`   ${abbreviateSessionId(resolvedSessionIds[i])} → ${status}`);
+                    await displaySessionSummary(
+                      resolvedSessionIds[i],
+                      status,
+                      context.projectHash,
+                      config.wrapper?.projectsDir
+                    );
+                    console.log(); // blank line between sessions
                   }
                 }
                 return;
@@ -111,9 +177,17 @@ export function registerWaitCommand(program: Command): void {
               // ALL: Return if all sessions are terminal
               const allTerminal = statuses.every((status) => status && isTerminal(status));
               if (allTerminal) {
-                console.log('\n✅ All sessions completed');
+                console.log('\n✅ All sessions completed\n');
                 for (let i = 0; i < resolvedSessionIds.length; i++) {
-                  console.log(`   ${abbreviateSessionId(resolvedSessionIds[i])} → ${statuses[i]}`);
+                  await displaySessionSummary(
+                    resolvedSessionIds[i],
+                    statuses[i]!,
+                    context.projectHash,
+                    config.wrapper?.projectsDir
+                  );
+                  if (i < resolvedSessionIds.length - 1) {
+                    console.log(); // blank line between sessions
+                  }
                 }
                 return;
               }

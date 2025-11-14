@@ -2,6 +2,17 @@ import { promises as fsp } from 'node:fs';
 import type { SessionLogEvent } from '@/types/index.js';
 
 /**
+ * Completion information extracted from a session log
+ */
+export interface SessionCompletionInfo {
+  status: 'done' | 'failed' | 'interrupted' | 'unknown';
+  filesEdited: string[];
+  filesCreated: string[];
+  finalText?: string;
+  error?: string;
+}
+
+/**
  * Tail a session log file, printing assistant messages to stdout.
  * Supports both raw (raw JSON) and filtered (assistant text only) modes.
  * Can optionally stop when terminal events are detected.
@@ -371,6 +382,203 @@ export async function waitForFirstAssistantOutput(logPath: string, waitSeconds: 
     };
     watcher.on('change', check);
     watcher.on('rename', check);
-    const timer = setInterval(check, 200).unref();
+    setInterval(check, 200).unref();
   });
+}
+
+/**
+ * Collect completion information from a session log.
+ * Extracts final status, file operations, last assistant message, and errors.
+ * Returns structured data suitable for display in wait command.
+ *
+ * Best-effort parsing - swallows errors and returns partial data if log is incomplete.
+ */
+export async function collectCompletionInfo(logPath: string): Promise<SessionCompletionInfo> {
+  const result: SessionCompletionInfo = {
+    status: 'unknown',
+    filesEdited: [],
+    filesCreated: [],
+  };
+
+  let content: string;
+  try {
+    content = await fsp.readFile(logPath, 'utf-8');
+  } catch {
+    // Log file doesn't exist or can't be read
+    return result;
+  }
+
+  if (!content.trim()) {
+    return result;
+  }
+
+  const lines = content.split('\n').filter(Boolean);
+
+  // Track seen file paths to avoid duplicates
+  const editedSet = new Set<string>();
+  const createdSet = new Set<string>();
+
+  // Helper to check if event is terminal
+  const isTerminal = (kind: string): boolean => {
+    return (
+      kind === 'agent.runtime.done' ||
+      kind === 'agent.runtime.process.exited' ||
+      kind === 'wrapper.finalized' ||
+      kind === 'wrapper.claude.exited'
+    );
+  };
+
+  // Helper to extract file path from tool use/result payload (best-effort)
+  const extractFilePath = (payload: unknown): string | null => {
+    if (!payload || typeof payload !== 'object') return null;
+    const obj = payload as Record<string, unknown>;
+
+    // Try common field names for file paths
+    for (const key of ['file_path', 'filePath', 'path', 'uri']) {
+      const val = obj[key];
+      if (typeof val === 'string' && val.trim()) {
+        return val.trim();
+      }
+    }
+
+    // Try nested parameters (tool_use events often have { name, input } structure)
+    if (obj.input && typeof obj.input === 'object') {
+      const input = obj.input as Record<string, unknown>;
+      for (const key of ['file_path', 'filePath', 'path', 'uri']) {
+        const val = input[key];
+        if (typeof val === 'string' && val.trim()) {
+          return val.trim();
+        }
+      }
+    }
+
+    return null;
+  };
+
+  // Helper to check if message type is assistant-like
+  const isAssistantMessage = (messageType: string | undefined): boolean => {
+    if (!messageType) return false;
+    return (
+      messageType === 'assistant' ||
+      messageType.startsWith('assistant.') ||
+      messageType === 'assistant_partial'
+    );
+  };
+
+  // Parse events until terminal event
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as SessionLogEvent;
+
+      // Stop at terminal events
+      if (isTerminal(event.kind)) {
+        if (event.kind === 'agent.runtime.done') {
+          const payload = event.payload as { status?: string; reason?: string } | undefined;
+          if (payload?.status === 'done') {
+            result.status = 'done';
+          } else if (payload?.status === 'failed') {
+            result.status = 'failed';
+          } else if (payload?.status === 'interrupted') {
+            result.status = 'interrupted';
+          }
+          // If done event has a reason and status is failed/interrupted, capture it
+          if (payload?.reason && result.status !== 'done' && !result.error) {
+            result.error = payload.reason;
+          }
+        }
+        break;
+      }
+
+      // Extract final assistant message and tool uses
+      if (event.kind === 'agent.runtime.message') {
+        const payload = event.payload as { messageType?: string; text?: string; payload?: unknown } | undefined;
+        if (isAssistantMessage(payload?.messageType) && payload?.text?.trim()) {
+          result.finalText = payload.text.trim();
+        }
+
+        // Extract file operations from tool calls (best-effort)
+        // Claude SDK structure: payload.payload.message.content[] contains tool_use objects
+        if (payload?.payload && typeof payload.payload === 'object') {
+          const sdkPayload = payload.payload as Record<string, unknown>;
+          const message = sdkPayload.message;
+          if (message && typeof message === 'object') {
+            const messageObj = message as Record<string, unknown>;
+            const content = messageObj.content;
+            if (Array.isArray(content)) {
+              for (const item of content) {
+                if (item && typeof item === 'object') {
+                  const contentItem = item as Record<string, unknown>;
+                  if (contentItem.type === 'tool_use') {
+                    const toolName = contentItem.name;
+                    const toolInput = contentItem.input;
+                    if (typeof toolName === 'string' && toolInput && typeof toolInput === 'object') {
+                      const filePath = extractFilePath(toolInput);
+                      if (filePath) {
+                        if (toolName === 'Write') {
+                          createdSet.add(filePath);
+                        } else if (toolName === 'Edit') {
+                          editedSet.add(filePath);
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Also check agent.runtime.result for final text fallback
+      if (event.kind === 'agent.runtime.result') {
+        const payload = event.payload as { result?: string } | undefined;
+        if (payload?.result?.trim()) {
+          result.finalText = payload.result.trim();
+        }
+      }
+
+      // Extract errors (priority order: agent.runtime.error, agent.runtime.process.error, stderr)
+      if (event.kind === 'agent.runtime.error' && !result.error) {
+        const payload = event.payload as { error?: string; message?: string } | undefined;
+        const errorMsg = payload?.error || payload?.message;
+        if (errorMsg?.trim()) {
+          result.error = errorMsg.trim();
+        }
+      }
+
+      if (event.kind === 'agent.runtime.process.error' && !result.error) {
+        const payload = event.payload as { error?: string; message?: string } | undefined;
+        const errorMsg = payload?.error || payload?.message;
+        if (errorMsg?.trim()) {
+          result.error = errorMsg.trim();
+        }
+      }
+
+      if (event.kind === 'agent.runtime.stderr' && !result.error) {
+        const payload = event.payload as { data?: string } | undefined;
+        if (payload?.data?.trim()) {
+          result.error = payload.data.trim();
+        }
+      }
+    } catch {
+      // Ignore parse errors - best-effort
+      continue;
+    }
+  }
+
+  // Convert sets to arrays
+  result.filesEdited = Array.from(editedSet).sort();
+  result.filesCreated = Array.from(createdSet).sort();
+
+  // If status is still unknown but we have a finalText, assume done
+  if (result.status === 'unknown' && result.finalText) {
+    result.status = 'done';
+  }
+
+  // If we have an error but status is unknown, mark as failed
+  if (result.status === 'unknown' && result.error) {
+    result.status = 'failed';
+  }
+
+  return result;
 }
