@@ -9,6 +9,8 @@ const SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
 const AGENTS_DIR = path.join(os.homedir(), '.claude', 'agents');
 
 const BUILTIN_AGENTS = [
+  'Explore.md',
+  'Plan.md',
   'programmer.md',
   'junior-engineer.md',
   'context-engineer.md',
@@ -178,10 +180,10 @@ export async function setupHooks(): Promise<void> {
 
   // Prompt to copy built-in agents
   console.log('\nWould you like to install built-in agents?');
-  console.log('This will copy example agents (programmer, junior-engineer, context-engineer, senior-architect)');
+  console.log('This will copy example agents (Explore, Plan, programmer, junior-engineer, context-engineer, senior-architect)');
   console.log('to your ~/.claude/agents directory.\n');
 
-  const shouldCopy = await promptUser('Install built-in agents? These agents include both anthropic and cursor-agents, and demonstrate the power of the klaude cli. If installed, the md files will be copied to your ~/.claude/agents directory. Install?(yes/no) ');
+  const shouldCopy = await promptUser('Install built-in agents? (Explore for fast code searches, Plan for implementation planning, and specialist agents for programming tasks) (yes/no) ');
 
   if (shouldCopy) {
     console.log('\nCopying built-in agents:');
