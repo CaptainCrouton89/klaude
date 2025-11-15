@@ -200,11 +200,8 @@ To delegate work to specialized agents, use:
 
 Example:
   klaude start context-engineer "investigate authentication patterns"
-
-Available options:
-  --share     Share current conversation context with the new agent
   
-Be proactive about using agents to delegate work. For complex or instruction-heavy tasks, investigating, planning, and even implementing can be improved by delegating and parallelizing.`;
+Be proactive about using agents to delegate work. For complex or instruction-heavy tasks, investigating, planning, and even implementing can be improved by delegating and parallelizing. Begin by delegating agents for understanding the problem, then an agent for planning the solution, and finally an agent for each major component of the solution.`;
 
     const output = {
       hookSpecificOutput: {

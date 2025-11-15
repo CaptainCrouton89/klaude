@@ -192,11 +192,7 @@ export function registerHookCommand(program: Command): void {
               permissionDecisionReason: `The Task tool is replaced with \`klaude start ${agentType} "${promptPreview}..." [options]\`. You MUST re-delegate this task, but use klaude instead. Treat this just like you would the Task tool, but use the klaude cli instead.
 
 To start a task, use:
-  klaude start ${agentType} "${promptPreview}..." [options]
-
-Available options:
-  --checkout  Request immediate checkout after start (enter interactive TUI).
-  --share     Share current context with the new agent.`,
+  klaude start ${agentType} "${promptPreview}..."`,
             },
           };
           process.stdout.write(JSON.stringify(response) + '\n');
