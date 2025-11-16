@@ -20,6 +20,7 @@ export function registerStatusCommand(program: Command): void {
     .description('Check status of agent session(s)')
     .argument('<sessionIds...>', 'One or more session IDs to check')
     .option('-C, --cwd <path>', 'Project directory override')
+    .option('-v, --verbose', 'Show detailed status information')
     .action(async (sessionIds: string[], options: OptionValues) => {
       try {
         const projectCwd = resolveProjectDirectory(options.cwd);
@@ -71,11 +72,21 @@ export function registerStatusCommand(program: Command): void {
 
             // Calculate time since last update
             const updatedAt = session.updated_at || session.created_at;
-            const timeSince = new Date(updatedAt).toLocaleString();
+            const date = new Date(updatedAt);
 
-            console.log(
-              `${statusIcon} ${abbreviateSessionId(session.id)} | agent: ${session.agent_type} | status: ${session.status} | updated: ${timeSince}`
-            );
+            if (options.verbose) {
+              // Detailed format: emoji, ID, agent, status, full timestamp
+              const timeSince = date.toLocaleString();
+              console.log(
+                `${statusIcon} ${abbreviateSessionId(session.id)} | agent: ${session.agent_type} | status: ${session.status} | updated: ${timeSince}`
+              );
+            } else {
+              // Condensed format: emoji, ID, time only (no date)
+              const timeOnly = date.toLocaleTimeString();
+              console.log(
+                `${statusIcon} ${abbreviateSessionId(session.id)} | ${timeOnly}`
+              );
+            }
           }
 
           if (hasErrors) {

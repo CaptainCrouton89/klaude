@@ -90,7 +90,7 @@ export function registerWaitCommand(program: Command): void {
     .command('wait')
     .description('Block until agent session(s) complete')
     .argument('<sessionIds...>', 'One or more session IDs to wait for')
-    .option('--timeout <seconds>', 'Maximum wait time in seconds (default: no limit)', undefined)
+    .option('--timeout <seconds>', 'Maximum wait time in seconds (default: 570)', '570')
     .option('--any', 'Return when ANY session completes (default: wait for ALL)', false)
     .option('--interval <ms>', 'Poll interval in milliseconds', '500')
     .option('-C, --cwd <path>', 'Project directory override')
@@ -110,7 +110,7 @@ export function registerWaitCommand(program: Command): void {
           }
 
           // Parse options
-          const timeoutMs = options.timeout ? parseInt(options.timeout, 10) * 1000 : undefined;
+          const timeoutMs = parseInt(options.timeout, 10) * 1000;
           const intervalMs = parseInt(options.interval, 10);
           const waitForAny = options.any as boolean;
 
@@ -141,8 +141,29 @@ export function registerWaitCommand(program: Command): void {
           // Poll loop
           while (true) {
             // Check timeout
-            if (timeoutMs !== undefined && Date.now() - startTime > timeoutMs) {
-              console.error(`\n❌ Timeout after ${options.timeout}s`);
+            if (Date.now() - startTime > timeoutMs) {
+              console.log(); // blank line before progress
+              console.log(`⏱️ Timeout after 9m30s. Current progress:`);
+              console.log(); // blank line before summaries
+
+              // Display progress for all sessions
+              for (let i = 0; i < resolvedSessionIds.length; i++) {
+                const status = getSessionById(resolvedSessionIds[i])?.status;
+                if (status) {
+                  await displaySessionSummary(
+                    resolvedSessionIds[i],
+                    status,
+                    context.projectHash,
+                    config.wrapper?.projectsDir
+                  );
+                  if (i < resolvedSessionIds.length - 1) {
+                    console.log(); // blank line between sessions
+                  }
+                }
+              }
+
+              console.log();
+              console.log(`Act on this progress, or else run klaude wait ${sessionIds.join(' ')} again.`);
               process.exitCode = 124; // Standard timeout exit code
               return;
             }

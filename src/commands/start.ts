@@ -75,14 +75,14 @@ export function registerStartCommand(program: Command): void {
           console.log('Next steps:');
           console.log(`  - Tail output:   klaude logs ${abbrevId} -f`);
           console.log(`  - Check status:  klaude status ${abbrevId}`);
-          console.log(`  - Wait for done: klaude wait ${abbrevId}`);
+          console.log(`  - Wait for done: klaude wait ${abbrevId} // 10 minutes`);
           if (runtimeKind === 'claude') {
             console.log(`  - Enter TUI:     klaude checkout ${abbrevId}`);
             console.log(`  - Message:       klaude message ${abbrevId} "<prompt>" --timeout 5`);
           }
           console.log(`  - Interrupt:     klaude interrupt ${abbrevId}`);
           if (runtimeKind === 'cursor') {
-            console.log('Note: Cursor sessions do not support checkout or message flows.');
+            // console.log('Note: Cursor sessions do not support checkout or message flows.');
           }
         }
 
