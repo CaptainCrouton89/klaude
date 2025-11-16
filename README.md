@@ -182,7 +182,6 @@ klaude start <agent_type> <prompt> [agent_count] [options]
 **Agent Type:** Name of any agent definition in your agents directory (e.g., `orchestrator`, `programmer`, `context-engineer`, or custom agents).
 
 **Options:**
-- `-c, --checkout` — Check out the agent immediately after starting
 - `-s, --share` — Share current context (last X messages) with the new agent
 - `-v, --verbose` — Show detailed debug information
 - `--instance <id>` — Target specific wrapper instance

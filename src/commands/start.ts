@@ -16,7 +16,7 @@ export function registerStartCommand(program: Command): void {
     .argument('<agentType>', 'Agent type identifier (e.g., planner, programmer)')
     .argument('<prompt>', 'Prompt or task description for the agent')
     .argument('[agentCount]', 'Optional agent count for fan-out requests')
-    .option('-c, --checkout', 'Request immediate checkout after start')
+    // .option('-c, --checkout', 'Request immediate checkout after start')
     .option('-s, --share', 'Share current context with the new agent')
     .option('-v, --verbose', 'Verbose: print debug details (instance, log path)')
     .option('--instance <id>', 'Target instance id')
@@ -48,7 +48,7 @@ export function registerStartCommand(program: Command): void {
           agentCount,
           parentSessionId,
           options: {
-            checkout: Boolean(options.checkout),
+            // checkout: Boolean(options.checkout),
             share: Boolean(options.share),
           },
         };
@@ -86,30 +86,30 @@ export function registerStartCommand(program: Command): void {
           }
         }
 
-        const requestedCheckout = Boolean(payload.options?.checkout);
-        const checkoutSupported = runtimeKind === 'claude';
-
-        if (requestedCheckout && !checkoutSupported) {
-          console.log('Checkout is not supported for cursor-backed agents; ignoring --checkout.');
-        } else if (requestedCheckout) {
-          // For fresh sessions, wait longer to ensure Claude has fully persisted the conversation
-          // before attempting to resume it. This prevents "No conversation found" errors.
-          const checkoutResponse = await requestCheckout(instance.socketPath, {
-            sessionId: result.sessionId,
-            waitSeconds: 15,
-          });
-          if (!checkoutResponse.ok) {
-            throw new KlaudeError(checkoutResponse.error.message, checkoutResponse.error.code);
-          }
-          const checkoutResult = checkoutResponse.result;
-          if (options.verbose) {
-            console.log(
-              `Checkout activated for session ${abbreviateSessionId(checkoutResult.sessionId)} (resume ${checkoutResult.claudeSessionId}).`,
-            );
-          } else {
-            console.log(`session: ${abbreviateSessionId(checkoutResult.sessionId)} (entered via resume)`);
-          }
-        }
+        // const requestedCheckout = Boolean(payload.options?.checkout);
+        // const checkoutSupported = runtimeKind === 'claude';
+        //
+        // if (requestedCheckout && !checkoutSupported) {
+        //   console.log('Checkout is not supported for cursor-backed agents; ignoring --checkout.');
+        // } else if (requestedCheckout) {
+        //   // For fresh sessions, wait longer to ensure Claude has fully persisted the conversation
+        //   // before attempting to resume it. This prevents "No conversation found" errors.
+        //   const checkoutResponse = await requestCheckout(instance.socketPath, {
+        //     sessionId: result.sessionId,
+        //     waitSeconds: 15,
+        //   });
+        //   if (!checkoutResponse.ok) {
+        //     throw new KlaudeError(checkoutResponse.error.message, checkoutResponse.error.code);
+        //   }
+        //   const checkoutResult = checkoutResponse.result;
+        //   if (options.verbose) {
+        //     console.log(
+        //       `Checkout activated for session ${abbreviateSessionId(checkoutResult.sessionId)} (resume ${checkoutResult.claudeSessionId}).`,
+        //     );
+        //   } else {
+        //     console.log(`session: ${abbreviateSessionId(checkoutResult.sessionId)} (entered via resume)`);
+        //   }
+        // }
       } catch (error) {
         printError(error);
         process.exitCode = process.exitCode ?? 1;
