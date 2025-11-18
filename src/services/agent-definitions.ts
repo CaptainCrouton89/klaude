@@ -327,3 +327,42 @@ export async function loadAgentDefinition(
   agentCache.set(cacheKey, definition);
   return definition;
 }
+
+export async function listAvailableAgentTypes(
+  options: AgentDefinitionLoadOptions = {},
+): Promise<string[]> {
+  const directories = getAgentDirectories(options.projectRoot);
+  const agentTypes = new Set<string>();
+
+  // Add built-in general-purpose agent
+  agentTypes.add('general-purpose');
+
+  for (const directory of directories) {
+    let directoryEntries: string[] = [];
+    try {
+      directoryEntries = await fsp.readdir(directory.path);
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          continue;
+        }
+      }
+      // Skip directories we can't read
+      continue;
+    }
+
+    for (const entryName of directoryEntries) {
+      if (!entryName.toLowerCase().endsWith('.md')) {
+        continue;
+      }
+
+      const baseName = entryName.slice(0, -3);
+      const normalizedType = normalizeAgentType(baseName);
+      agentTypes.add(normalizedType);
+    }
+  }
+
+  return Array.from(agentTypes).sort();
+}
+
+export { normalizeAgentType };

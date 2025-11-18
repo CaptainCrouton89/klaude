@@ -6,11 +6,6 @@ import type { WriteStream } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 
 import {
-  loadAgentDefinition,
-} from '@/services/agent-definitions.js';
-import type { AgentDefinition } from '@/services/agent-definitions.js';
-import type { ClaudeCliFlags, McpServerConfig } from '@/types/index.js';
-import {
   calculateSessionDepth,
   closeDatabase,
   createAgentUpdate,
@@ -22,10 +17,10 @@ import {
   createSession,
   getClaudeSessionLink,
   getInstanceById,
-  listClaudeSessionLinks,
   getProjectByHash,
   getSessionById,
   initializeDatabase,
+  listClaudeSessionLinks,
   markInstanceEnded,
   markRuntimeExited,
   markSessionEnded,
@@ -33,13 +28,18 @@ import {
   updateSessionProcessPid,
   updateSessionStatus,
 } from '@/db/index.js';
-import { abbreviateSessionId } from '@/utils/cli-helpers.js';
+import type { AgentDefinition } from '@/services/agent-definitions.js';
+import {
+  listAvailableAgentTypes,
+  loadAgentDefinition
+} from '@/services/agent-definitions.js';
 import { loadConfig } from '@/services/config-loader.js';
 import {
   markInstanceEnded as markRegistryInstanceEnded,
   registerInstance,
 } from '@/services/instance-registry.js';
 import { prepareProjectContext } from '@/services/project-context.js';
+import type { ClaudeCliFlags, McpServerConfig } from '@/types/index.js';
 import type {
   CheckoutRequestPayload,
   CheckoutResponsePayload,
@@ -50,6 +50,7 @@ import type {
   StartAgentRequestPayload,
   StartAgentResponsePayload,
 } from '@/types/instance-ipc.js';
+import { abbreviateSessionId } from '@/utils/cli-helpers.js';
 import { KlaudeError } from '@/utils/error-handler.js';
 import { appendSessionEvent } from '@/utils/logger.js';
 import { getInstanceSocketPath, getSessionLogPath } from '@/utils/path-helper.js';
@@ -428,8 +429,12 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     // Allow general-purpose agent to have no definition (runs with user prompt as-is)
     if (!agentDefinition && normalizedAgentType !== 'general-purpose') {
+      const availableTypes = await listAvailableAgentTypes({
+        projectRoot: context.projectRoot,
+      });
+      const typesList = availableTypes.join(', ');
       throw new KlaudeError(
-        `Unknown agent type: ${requestedAgentType}`,
+        `Unknown agent type: ${requestedAgentType}\n\nAvailable agent types: ${typesList}`,
         'E_AGENT_TYPE_INVALID',
       );
     }
