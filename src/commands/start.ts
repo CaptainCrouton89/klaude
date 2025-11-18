@@ -1,4 +1,4 @@
-import { requestCheckout, startAgentSession } from '@/services/instance-client.js';
+import { startAgentSession } from '@/services/instance-client.js';
 import { resolveInstanceForProject } from '@/services/instance-selection.js';
 import { prepareProjectContext } from '@/services/project-context.js';
 import { abbreviateSessionId, resolveProjectDirectory } from '@/utils/cli-helpers.js';

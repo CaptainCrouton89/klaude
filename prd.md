@@ -232,7 +232,6 @@ Notes:
   - Starts a new wrapper instance for the current project directory. Multiple instances may run concurrently in the same project.
 
 - `klaude start <agent_type> <prompt> [agent_count] [options]`
-  - Options: `-c, --checkout`, `-s, --share`, `--instance <id>`.
   - Behavior: always create a session and runtime in the addressed instance; if attached (default), attach to the runtime stream; if detached, return immediately with the new session id.
 
 - `klaude checkout [id] [--instance <id>]`
