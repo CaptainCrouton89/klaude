@@ -32,7 +32,7 @@ During setup, you'll be prompted to install built-in agents:
 |-------|---------|
 | **programmer** | Complex multi-file implementations requiring pattern analysis |
 | **junior-engineer** | Focused implementation of well-specified tasks |
-| **context-engineer** | Codebase exploration and pattern discovery |
+| **Explore** | Codebase exploration and pattern discovery |
 | **senior-architect** | Technical review and architectural guidance |
 
 The built-in agents are optional and will be copied to `~/.claude/agents/` only if you confirm. They serve as examples you can customize or use as-is.
@@ -179,7 +179,7 @@ Spawns an agent (type loaded from agents directory) to perform the task. Agent p
 klaude start <agent_type> <prompt> [agent_count] [options]
 ```
 
-**Agent Type:** Name of any agent definition in your agents directory (e.g., `orchestrator`, `programmer`, `context-engineer`, or custom agents).
+**Agent Type:** Name of any agent definition in your agents directory (e.g., `orchestrator`, `programmer`, `Explore`, or custom agents).
 
 **Options:**
 - `-s, --share` — Share current context (last X messages) with the new agent

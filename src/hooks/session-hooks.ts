@@ -196,10 +196,10 @@ export async function handleSessionStartHook(payload: ClaudeHookPayload): Promis
     const welcomeMessage = `The Task tool has been replaced with \`klaude\`. It's more powerful than the Task tool since the spawned agents are non-blocking; you can continue your own work while the agent works in the background. Always use klaude instead of the Task tool. Any agent type compatible with the Task tool is also compatible with klaude.
 
 To delegate work to specialized agents, use:
-  klaude start <agent-type> "<task description>" [options]
+  klaude start <agent-type> "<task description>"
 
 Example:
-  klaude start context-engineer "investigate authentication patterns"
+  klaude start Explore "investigate authentication patterns"
   
 Be proactive about using agents to delegate work. For complex or instruction-heavy tasks, investigating, planning, and even implementing can be improved by delegating and parallelizing. Begin by delegating agents for understanding the problem, then an agent for planning the solution, and finally an agent for each major component of the solution.`;
 
@@ -344,7 +344,7 @@ export async function handlePreUserMessageHook(payload: PreUserMessagePayload): 
                        typeof payload.message === 'string' ? payload.message : '');
 
   // Regex to detect @agent-<agent-name> pattern
-  // Captures agent name like: @agent-planner, @agent-context-engineer, etc.
+  // Captures agent name like: @agent-planner, @agent-Explore, etc.
   const agentPattern = /@agent-([a-zA-Z0-9\-]+)/;
   const match = messageText.match(agentPattern);
 

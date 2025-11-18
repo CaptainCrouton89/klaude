@@ -4,7 +4,7 @@ TypeScript/Node.js project. Wrapper that spawns Claude Code as a subprocess and 
 
 ## Quick Reference
 
-**What it does**: Enables spawning specialized agents (`orchestrator`, `programmer`, `context-engineer`, etc.) that run inside Claude Code with stateful session management and MCP configuration support.
+**What it does**: Enables spawning specialized agents (`orchestrator`, `programmer`, `Explore`, etc.) that run inside Claude Code with stateful session management and MCP configuration support.
 
 **Tech stack**: TypeScript, Commander (CLI), SQLite (WAL mode via better-sqlite3), Claude Agent SDK, Chalk, js-yaml
 

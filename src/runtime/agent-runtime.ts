@@ -196,7 +196,7 @@ async function blockTaskToolHook(
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: `The Task tool is replaced with \`klaude start ${agentType} "${promptPreview}..." [options]\`. You MUST re-delegate this task, but use klaude instead. Treat this just like you would the Task tool, but use the klaude cli instead.
+        permissionDecisionReason: `The Task tool is replaced with \`klaude start ${agentType} "${promptPreview}..."\`. You MUST re-delegate this task, but use klaude instead. Treat this just like you would the Task tool, but use the klaude cli instead.
 
 To start a task, use:
   klaude start ${agentType} "${promptPreview}..."`,

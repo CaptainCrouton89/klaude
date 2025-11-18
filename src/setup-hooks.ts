@@ -16,7 +16,7 @@ const BUILTIN_AGENTS = [
   'Plan.md',
   'programmer.md',
   'junior-engineer.md',
-  'context-engineer.md',
+  'Explore.md',
   'senior-architect.md',
 ];
 
@@ -184,7 +184,7 @@ export async function setupHooks(): Promise<void> {
 
   // Prompt to copy built-in agents
   console.log('\nWould you like to install built-in agents?');
-  console.log('This will copy example agents (Explore, Plan, programmer, junior-engineer, context-engineer, senior-architect)');
+  console.log('This will copy example agents (Explore, Plan, programmer, junior-engineer, Explore, senior-architect)');
   console.log('to your ~/.claude/agents directory.\n');
 
   const shouldCopy = await promptUser('Install built-in agents? (Explore for fast code searches, Plan for implementation planning, and specialist agents for programming tasks) (yes/no) ');
