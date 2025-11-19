@@ -281,11 +281,7 @@ async function buildQueryOptions(
 
   // Add agent instructions as appended system prompt if provided
   if (init.outputStyle && init.outputStyle.trim().length > 0) {
-    options.systemPrompt = {
-      type: 'preset',
-      preset: 'claude_code',
-      append: init.outputStyle,
-    };
+    options.systemPrompt = init.outputStyle
     options.settingSources = ['project'];
   }
 
