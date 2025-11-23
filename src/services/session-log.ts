@@ -418,6 +418,10 @@ export async function collectCompletionInfo(logPath: string): Promise<SessionCom
   const editedSet = new Set<string>();
   const createdSet = new Set<string>();
 
+  // Track streaming text accumulation (for delta fragments)
+  let accumulatedText = '';
+  let lastMessageWasStreaming = false;
+
   // Helper to check if event is terminal
   const isTerminal = (kind: string): boolean => {
     return (
@@ -496,7 +500,22 @@ export async function collectCompletionInfo(logPath: string): Promise<SessionCom
       if (event.kind === 'agent.runtime.message') {
         const payload = event.payload as { messageType?: string; text?: string; payload?: unknown } | undefined;
         if (isAssistantMessage(payload?.messageType) && payload?.text?.trim()) {
-          result.finalText = payload.text.trim();
+          // Check if this is a streaming delta fragment
+          const isDelta = payload.payload &&
+                         typeof payload.payload === 'object' &&
+                         'delta' in payload.payload &&
+                         payload.payload.delta === true;
+
+          if (isDelta) {
+            // Accumulate streaming deltas
+            accumulatedText += payload.text;
+            lastMessageWasStreaming = true;
+          } else {
+            // Non-streaming message: use as-is (overwrites any previous accumulated text)
+            result.finalText = payload.text.trim();
+            accumulatedText = '';
+            lastMessageWasStreaming = false;
+          }
         }
 
         // Extract file operations from tool calls (best-effort)
@@ -568,6 +587,11 @@ export async function collectCompletionInfo(logPath: string): Promise<SessionCom
   // Convert sets to arrays
   result.filesEdited = Array.from(editedSet).sort();
   result.filesCreated = Array.from(createdSet).sort();
+
+  // Finalize accumulated streaming text if applicable
+  if (lastMessageWasStreaming && accumulatedText.trim()) {
+    result.finalText = accumulatedText.trim();
+  }
 
   // If status is still unknown but we have a finalText, assume done
   if (result.status === 'unknown' && result.finalText) {
