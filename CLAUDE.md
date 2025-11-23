@@ -30,6 +30,18 @@ pnpm run lint           # eslint
 2. **Wrapper instance** (`src/services/wrapper-instance.ts`) – Manages Claude subprocess, socket server
 3. **Agent runtime** (`src/runtime/agent-runtime.ts`) – Spawned subprocess, uses Claude Agent SDK
 
+**Four-Runtime System:**
+- **Claude Code** – Default for Claude models (Sonnet, Opus, Haiku)
+- **Codex CLI** – OpenAI's official CLI for GPT models (gpt-5, gpt-4.1, o1)
+- **Cursor CLI** – Alternative for GPT models + exclusive models (composer-1)
+- **Gemini CLI** – Google's Gemini models (gemini-2.5-flash, etc.) with Cursor fallback
+
+Runtime selection (`src/services/runtime-selector.ts`):
+1. Model-based detection (highest priority): Claude, GPT, or Gemini
+2. Agent definition `runtime` hint (GPT models only)
+3. Config `wrapper.gpt.preferredRuntime` (codex | cursor | auto for GPT)
+4. Fallbacks: GPT (codex → cursor), Gemini (gemini → cursor)
+
 **Database Schema:**
 - `projects` – Project root + SHA-256 hash (24 chars for socket limits)
 - `instances` – Wrapper processes (PID, TTY, lifecycle)
@@ -52,8 +64,11 @@ pnpm run lint           # eslint
 **Commands** (`src/commands/`): `start.ts`, `checkout.ts`, `wait.ts`, `status.ts`, `message.ts`, `interrupt.ts`, `sessions.ts`, `logs.ts`, `instances.ts`, `setup-hooks.ts`, `watch.ts`
 
 **Services** (`src/services/`):
-- `wrapper-instance.ts` – Socket server, Claude spawn/kill, session checkout
-- `agent-definitions.ts` – Parse agent markdown YAML frontmatter
+- `wrapper-instance.ts` – Socket server, Claude/Codex/Cursor/Gemini spawn/kill, session checkout
+- `agent-definitions.ts` – Parse agent markdown YAML frontmatter (includes `runtime` field)
+- `runtime-selector.ts` – Determines runtime (claude|codex|cursor|gemini) based on model
+- `runtime-validator.ts` – Validates Codex/Cursor/Gemini binary availability
+- `gpt-event-parser.ts` – Event parsers for Codex, Cursor, and Gemini runtimes
 - `update-watcher.ts` – Programmatic API for consuming push updates
 - `session-log.ts`, `mcp-loader.ts`, `mcp-resolver.ts`, `project-context.ts`, `instance-client.ts`, `instance-registry.ts`
 
@@ -81,7 +96,8 @@ pnpm run lint           # eslint
 
 **Agent Definition** (`agent-definitions.ts`):
 - Markdown with YAML frontmatter (delimited by `---`)
-- Fields: `name`, `description`, `allowedAgents`, `model`, `color`, `mcpServers`, `inheritProjectMcps`, `inheritParentMcps`
+- Fields: `name`, `description`, `allowedAgents`, `model`, `color`, `runtime`, `mcpServers`, `inheritProjectMcps`, `inheritParentMcps`
+- `runtime`: Optional 'codex' | 'cursor' hint for GPT models
 
 **Session Checkout** (`wrapper-instance.ts:1279-1478`):
 - Validates target has Claude session ID

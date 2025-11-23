@@ -118,21 +118,69 @@ wrapper:
   claudeBinary: /opt/homebrew/bin/claude  # default
 ```
 
-### Cursor Runtime Retries
+### GPT Runtime Configuration
 
-`cursor-agent` occasionally exits early when several Composer agents start at once. Klaude automatically retries these startup failures (default: 3 attempts with exponential backoff).
+Klaude supports **two GPT runtimes**: OpenAI Codex CLI and Cursor CLI. When agents use GPT models (`gpt-5`, `gpt-4.1`, `o1`, `composer-1`, etc.), Klaude routes to these runtimes instead of Claude Code.
 
-Configure retry behavior in `~/.klaude/config.yaml`:
+**Install Codex (recommended for GPT models):**
+```bash
+npm install -g @openai/codex
+# or
+brew install --cask codex
+```
+
+**Install Cursor (alternative GPT runtime):**
+```bash
+curl https://cursor.com/install -fsS | bash
+```
+
+#### Runtime Selection
+
+Configure runtime preferences in `~/.klaude/config.yaml`:
 
 ```yaml
 wrapper:
-  cursor:
-    startupRetries: 3          # total attempts, including the first launch
-    startupRetryDelayMs: 400   # base delay before the next attempt
-    startupRetryJitterMs: 200  # random jitter to stagger concurrent restarts
+  gpt:
+    preferredRuntime: auto  # 'codex', 'cursor', or 'auto'
+    fallbackOnError: true   # Try alternative runtime if preferred fails
+
+    codex:
+      binaryPath: codex
+      startupRetries: 3
+      startupRetryDelayMs: 400
+      startupRetryJitterMs: 200
+
+    cursor:
+      binaryPath: cursor-agent
+      startupRetries: 3
+      startupRetryDelayMs: 400
+      startupRetryJitterMs: 200
 ```
 
-> **Tip:** Set `startupRetries: 1` to disable retries entirely.
+**Runtime modes:**
+- `auto` (default): Try Codex first, fallback to Cursor if unavailable
+- `codex`: Always use Codex for GPT models
+- `cursor`: Always use Cursor for GPT models
+
+#### Per-Agent Runtime Override
+
+Force a specific runtime in agent definitions:
+
+```markdown
+---
+name: GPT Architect
+model: gpt-5.1-codex-max
+runtime: codex  # Force Codex for this agent
+---
+
+Agent instructions...
+```
+
+**Why both runtimes?**
+- **Codex**: Official OpenAI tool, best for standard GPT models
+- **Cursor**: Has exclusive models like `composer-1` unavailable elsewhere
+
+> **Tip:** Set `startupRetries: 1` to disable retries entirely for either runtime.
 
 ## 🏗️ Architecture
 
