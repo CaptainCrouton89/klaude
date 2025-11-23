@@ -500,11 +500,17 @@ export async function collectCompletionInfo(logPath: string): Promise<SessionCom
       if (event.kind === 'agent.runtime.message') {
         const payload = event.payload as { messageType?: string; text?: string; payload?: unknown } | undefined;
         if (isAssistantMessage(payload?.messageType) && payload?.text?.trim()) {
-          // Check if this is a streaming delta fragment
-          const isDelta = payload.payload &&
-                         typeof payload.payload === 'object' &&
-                         'delta' in payload.payload &&
-                         payload.payload.delta === true;
+          // Check if this is a streaming delta fragment by examining messageType
+          // Claude: messageType === 'stream_event' for streaming
+          // Cursor: messageType includes 'partial' for streaming
+          // Codex/Gemini: check if payload has delta object (not boolean)
+          const messageType = typeof payload.messageType === 'string' ? payload.messageType : '';
+          const isStreamingByType = messageType === 'stream_event' || messageType.includes('partial');
+          const hasDeltaObject = payload.payload &&
+                                 typeof payload.payload === 'object' &&
+                                 'delta' in payload.payload &&
+                                 typeof (payload.payload as { delta?: unknown }).delta === 'object';
+          const isDelta = isStreamingByType || hasDeltaObject;
 
           if (isDelta) {
             // Accumulate streaming deltas
