@@ -3,8 +3,14 @@ dist
 .env
 tmp/
 docs/investigations/
+docs/plans/
+docs/implementations/
+docs/proposals/
+docs/codex-docs/
+docs/libraries/
 UX_GAP_ANALYSIS.md
 .mcp.json
 test-query.js
 DEBUG_*.md
 todo.md
+THREE_*.md
