@@ -69,11 +69,7 @@ async function displaySessionSummary(
       console.log(`Error: ${info.error.split('\n')[0]}`); // First line only
     } else if (info.finalText) {
       console.log();
-      // Truncate long responses to ~500 chars
-      const truncated = info.finalText.length > 500
-        ? info.finalText.slice(0, 500) + '...'
-        : info.finalText;
-      console.log(truncated);
+      console.log(info.finalText);
     }
   } catch {
     // Silently fall back to status-only display if log parsing fails
