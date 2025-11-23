@@ -50,6 +50,7 @@ interface RuntimeInitPayload {
     fallbackModel?: string | null;
     permissionMode?: PermissionMode | null;
     pathToClaudeCodeExecutable?: string | null;
+    reasoningEffort?: 'low' | 'medium' | 'high' | null;
   };
   /**
    * All available MCP servers from registries (.mcp.json, config.yaml)
@@ -237,6 +238,9 @@ async function buildQueryOptions(
   }
   if (init.sdk?.pathToClaudeCodeExecutable) {
     options.pathToClaudeCodeExecutable = init.sdk.pathToClaudeCodeExecutable;
+  }
+  if (init.sdk?.reasoningEffort) {
+    (options as QueryOptions & { reasoningEffort?: string }).reasoningEffort = init.sdk.reasoningEffort;
   }
 
   // Continue a specific Claude session if requested
