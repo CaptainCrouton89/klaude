@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import type { WriteStream } from 'node:tty';
 import { fileURLToPath } from 'node:url';
@@ -1659,9 +1661,16 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     // Build CLI arguments based on Gemini CLI spec: [-m, model, --output-format, stream-json, --yolo, -p, prompt]
     let runtimeArgs: string[];
-    const fullPrompt = agentDefinition?.instructions
-      ? `${agentDefinition.instructions}\n\n---\n\n${payload.prompt}`
-      : payload.prompt;
+
+    // Write agent instructions to temp file for GEMINI_SYSTEM_MD
+    let systemPromptPath: string | null = null;
+    if (agentDefinition?.instructions) {
+      systemPromptPath = path.join(os.tmpdir(), `klaude-gemini-system-${session.id}.md`);
+      fs.writeFileSync(systemPromptPath, agentDefinition.instructions, 'utf8');
+    }
+
+    // Use only the user prompt (system prompt is passed via env var)
+    const fullPrompt = payload.prompt;
 
     runtimeArgs = [];
 
@@ -1747,6 +1756,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
           KLAUDE_INSTANCE_ID: instanceId,
           KLAUDE_SESSION_ID: fullSessionId,
           KLAUDE_SESSION_ID_SHORT: shortSessionId,
+          ...(systemPromptPath ? { GEMINI_SYSTEM_MD: systemPromptPath } : {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
