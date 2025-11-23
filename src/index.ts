@@ -51,7 +51,7 @@ void (async () => {
     { registerStatusCommand },
     { registerWatchCommand },
   ] = await Promise.all([
-    import('@/services/wrapper-instance.js'),
+    import('@/services/wrapper-instance/index.js'),
     import('@/utils/error-handler.js'),
     import('@/utils/cli-helpers.js'),
     import('@/commands/hook.js'),
