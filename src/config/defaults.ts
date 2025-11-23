@@ -8,6 +8,7 @@ export const DEFAULT_CONFIG: KlaudeConfig = {
   sdk: {
     model: "claude-haiku-4-5-20251001",
     permissionMode: "bypassPermissions",
+    reasoningEffort: "medium",
   },
   server: {
     enabled: false,
@@ -22,6 +23,29 @@ export const DEFAULT_CONFIG: KlaudeConfig = {
     switch: {
       graceSeconds: 1,
     },
+    gpt: {
+      preferredRuntime: "auto",
+      fallbackOnError: true,
+      codex: {
+        binaryPath: "codex",
+        startupRetries: 3,
+        startupRetryDelayMs: 400,
+        startupRetryJitterMs: 200,
+      },
+      cursor: {
+        binaryPath: "cursor-agent",
+        startupRetries: 3,
+        startupRetryDelayMs: 400,
+        startupRetryJitterMs: 200,
+      },
+      gemini: {
+        binaryPath: "gemini",
+        startupRetries: 3,
+        startupRetryDelayMs: 400,
+        startupRetryJitterMs: 200,
+      },
+    },
+    // Keep old cursor config for backward compatibility
     cursor: {
       startupRetries: 3,
       startupRetryDelayMs: 400,

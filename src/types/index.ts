@@ -30,6 +30,60 @@ export interface ClaudeCliFlags {
 }
 
 /**
+ * Runtime kind discriminator for agent processes
+ */
+export type RuntimeKind = 'claude' | 'codex' | 'cursor' | 'gemini';
+
+/**
+ * GPT runtime preference setting
+ * - 'codex': Prefer OpenAI Codex CLI
+ * - 'cursor': Prefer Cursor CLI
+ * - 'auto': Try codex first, fallback to cursor
+ */
+export type GptRuntimePreference = 'codex' | 'cursor' | 'auto';
+
+/**
+ * Codex-specific runtime configuration
+ */
+export interface CodexRuntimeConfig {
+  binaryPath?: string;
+  startupRetries?: number;
+  startupRetryDelayMs?: number;
+  startupRetryJitterMs?: number;
+}
+
+/**
+ * Cursor-specific runtime configuration
+ */
+export interface CursorRuntimeConfig {
+  binaryPath?: string;
+  startupRetries?: number;
+  startupRetryDelayMs?: number;
+  startupRetryJitterMs?: number;
+}
+
+/**
+ * Gemini-specific runtime configuration
+ */
+export interface GeminiRuntimeConfig {
+  binaryPath?: string;
+  startupRetries?: number;
+  startupRetryDelayMs?: number;
+  startupRetryJitterMs?: number;
+}
+
+/**
+ * GPT runtime configuration (Codex, Cursor, and Gemini)
+ */
+export interface GptRuntimeConfig {
+  preferredRuntime?: GptRuntimePreference;
+  fallbackOnError?: boolean;
+  codex?: CodexRuntimeConfig;
+  cursor?: CursorRuntimeConfig;
+  gemini?: GeminiRuntimeConfig;
+}
+
+/**
  * Configuration structure from ~/.klaude/config.yaml
  */
 export interface KlaudeConfig {
@@ -37,6 +91,7 @@ export interface KlaudeConfig {
     model: string;
     permissionMode?: string;
     fallbackModel?: string;
+    reasoningEffort?: 'low' | 'medium' | 'high';
   };
   server?: {
     enabled: boolean;
@@ -51,6 +106,9 @@ export interface KlaudeConfig {
     switch?: {
       graceSeconds?: number;
     };
+    /** GPT runtime configuration (Codex + Cursor) */
+    gpt?: GptRuntimeConfig;
+    /** @deprecated Use wrapper.gpt.cursor instead. Kept for backward compatibility. */
     cursor?: {
       startupRetries?: number;
       startupRetryDelayMs?: number;

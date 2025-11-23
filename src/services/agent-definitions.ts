@@ -12,6 +12,12 @@ export interface AgentDefinition {
   instructions: string | null;
   allowedAgents: string[];
   model: string | null;
+  /**
+   * Controls the reasoning effort for Claude models
+   * Valid values: 'low' | 'medium' | 'high'
+   * Default: 'medium' (from config)
+   */
+  reasoningEffort?: 'low' | 'medium' | 'high' | null;
   color: string | null;
   sourcePath: string | null;
   scope: AgentDefinitionScope;
@@ -30,6 +36,12 @@ export interface AgentDefinition {
    * Default: false (independent MCP configuration unless explicitly enabled)
    */
   inheritParentMcps?: boolean;
+  /**
+   * Explicit runtime preference for GPT models
+   * Only affects agents using GPT models (gpt-5, o1, etc.)
+   * If not specified, uses config default (auto mode)
+   */
+  runtime?: 'codex' | 'cursor';
 }
 
 export interface AgentDefinitionLoadOptions {
@@ -126,6 +138,26 @@ function parseBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function parseReasoningEffort(value: unknown): 'low' | 'medium' | 'high' | null {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+      return normalized as 'low' | 'medium' | 'high';
+    }
+  }
+  return null;
+}
+
+function parseRuntime(value: unknown): 'codex' | 'cursor' | null {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'codex' || normalized === 'cursor') {
+      return normalized as 'codex' | 'cursor';
+    }
+  }
+  return null;
+}
+
 function sanitizeText(value: unknown): string | null {
   if (value === null || value === undefined) {
     return null;
@@ -212,6 +244,8 @@ async function parseAgentFile(
   const mcpServers = parseMcpServers(metadataEntries.get('mcpservers'));
   const inheritProjectMcps = parseBoolean(metadataEntries.get('inheritprojectmcps'));
   const inheritParentMcps = parseBoolean(metadataEntries.get('inheritparentmcps'));
+  const reasoningEffort = parseReasoningEffort(metadataEntries.get('reasoningeffort'));
+  const runtime = parseRuntime(metadataEntries.get('runtime'));
 
   return {
     type: normalizedType,
@@ -220,12 +254,14 @@ async function parseAgentFile(
     instructions,
     allowedAgents,
     model: sanitizeText(metadataEntries.get('model')),
+    reasoningEffort: reasoningEffort || undefined,
     color: sanitizeText(metadataEntries.get('color')),
     sourcePath: agentPath,
     scope,
     mcpServers: mcpServers.length > 0 ? mcpServers : undefined,
     inheritProjectMcps,
     inheritParentMcps,
+    runtime: runtime || undefined,
   };
 }
 

@@ -461,7 +461,10 @@ export async function collectCompletionInfo(logPath: string): Promise<SessionCom
     return (
       messageType === 'assistant' ||
       messageType.startsWith('assistant.') ||
-      messageType === 'assistant_partial'
+      messageType === 'assistant_partial' ||
+      messageType === 'gemini.message.assistant' ||
+      messageType === 'codex.reasoning' ||
+      messageType.endsWith('.assistant')
     );
   };
 
@@ -537,7 +540,10 @@ export async function collectCompletionInfo(logPath: string): Promise<SessionCom
         }
       }
 
-      // Extract errors (priority order: agent.runtime.error, agent.runtime.process.error, stderr)
+      // Extract errors (priority order: agent.runtime.error, agent.runtime.process.error)
+      // NOTE: We intentionally do NOT capture stderr as errors since many runtimes
+      // (Gemini, Codex, Cursor) write informational messages to stderr (e.g.,
+      // "YOLO mode enabled", "Loaded cached credentials", retry messages)
       if (event.kind === 'agent.runtime.error' && !result.error) {
         const payload = event.payload as { error?: string; message?: string } | undefined;
         const errorMsg = payload?.error || payload?.message;
@@ -551,13 +557,6 @@ export async function collectCompletionInfo(logPath: string): Promise<SessionCom
         const errorMsg = payload?.error || payload?.message;
         if (errorMsg?.trim()) {
           result.error = errorMsg.trim();
-        }
-      }
-
-      if (event.kind === 'agent.runtime.stderr' && !result.error) {
-        const payload = event.payload as { data?: string } | undefined;
-        if (payload?.data?.trim()) {
-          result.error = payload.data.trim();
         }
       }
     } catch {

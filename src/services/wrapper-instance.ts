@@ -34,6 +34,9 @@ import {
   loadAgentDefinition
 } from '@/services/agent-definitions.js';
 import { loadConfig } from '@/services/config-loader.js';
+import { RuntimeSelector } from '@/services/runtime-selector.js';
+import { RuntimeValidator } from '@/services/runtime-validator.js';
+import { parseCodexEvent, parseCursorEvent, parseGeminiEvent } from '@/services/gpt-event-parser.js';
 import {
   markInstanceEnded as markRegistryInstanceEnded,
   registerInstance,
@@ -284,7 +287,7 @@ interface AgentRuntimeState {
   status: 'pending' | 'running' | 'done' | 'failed' | 'interrupted';
   logPath: string;
   detached: boolean;
-  runtimeKind: 'claude' | 'cursor';
+  runtimeKind: 'claude' | 'cursor' | 'codex' | 'gemini';
   cursorMeta?: {
     attempts: number;
     maxAttempts: number;
@@ -344,6 +347,39 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     metadataJson: JSON.stringify({ projectRoot: context.projectRoot }),
   });
 
+  // Validate GPT runtime availability on startup
+  const runtimeValidation = await RuntimeValidator.validateGptRuntimes(config);
+
+  if (
+    !runtimeValidation.codex.available &&
+    !runtimeValidation.cursor.available &&
+    !runtimeValidation.gemini.available
+  ) {
+    console.warn('⚠️  No GPT/Gemini runtime available! GPT and Gemini models will fail.');
+    console.warn('   Install Codex: npm i -g @openai/codex');
+    console.warn('   Install Cursor: curl https://cursor.com/install -fsS | bash');
+    console.warn('   Install Gemini: npm i -g @google/gemini-cli');
+  } else {
+    if (runtimeValidation.codex.available) {
+      debugLog(`[runtime-validation] Codex available: ${runtimeValidation.codex.version}`);
+    } else {
+      console.warn('⚠️  Codex CLI not found. Install: npm i -g @openai/codex');
+    }
+
+    if (runtimeValidation.cursor.available) {
+      debugLog(`[runtime-validation] Cursor available: ${runtimeValidation.cursor.version}`);
+    } else {
+      console.warn('⚠️  Cursor CLI not found. Some GPT models may be unavailable.');
+    }
+
+    if (runtimeValidation.gemini.available) {
+      debugLog(`[runtime-validation] Gemini available: ${runtimeValidation.gemini.version}`);
+    } else {
+      console.warn('⚠️  Gemini CLI not found. Gemini models will be unavailable.');
+      console.warn('   Install: npm i -g @google/gemini-cli');
+    }
+  }
+
   const wrapperConfig = config.wrapper ?? {};
   const claudeBinaryConfig = wrapperConfig.claudeBinary;
   if (!claudeBinaryConfig) {
@@ -396,20 +432,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
   const normalizeAgentType = (agentType: string): string => agentType.trim().toLowerCase();
 
-  const determineRuntimeKind = (definition: AgentDefinition | null): 'claude' | 'cursor' => {
-    const modelValue = definition?.model;
-    if (!modelValue) {
-      return 'claude';
-    }
-    const normalized = modelValue.replace(/\s+/g, '').toLowerCase();
-    if (normalized.includes('sonnet') || normalized === 'sonnet') {
-      return 'claude';
-    }
-    if (normalized.includes('haiku') || normalized === 'haiku') {
-      return 'claude';
-    }
-    return 'cursor';
-  };
+  const runtimeSelector = new RuntimeSelector(config);
 
   const handleStartAgent = async (
     payload: StartAgentRequestPayload,
@@ -565,7 +588,8 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       }
     }
 
-    const runtimeKind = determineRuntimeKind(agentDefinition);
+    const runtimeSelection = runtimeSelector.selectRuntime(agentDefinition);
+    const runtimeKind = runtimeSelection.runtime;
 
     const metadata = {
       agentType,
@@ -575,6 +599,8 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       agentCount: payload.agentCount ?? null,
       options: payload.options ?? {},
       runtimeKind,
+      runtimeFallback: runtimeSelection.fallbackRuntime ?? null,
+      runtimeReason: runtimeSelection.reason,
       definition: agentDefinition
         ? {
             name: agentDefinition.name,
@@ -600,6 +626,10 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       prompt: payload.prompt,
       metadataJson: JSON.stringify(metadata),
     });
+
+    debugLog(
+      `[runtime-selection] sessionId=${session.id}, runtime=${runtimeKind}, fallback=${runtimeSelection.fallbackRuntime ?? 'none'}, reason=${runtimeSelection.reason}`,
+    );
 
     const sessionLogPath = getSessionLogPath(
       context.projectHash,
@@ -665,8 +695,20 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         shareResumeId,
         agentDefinition ?? null,
       );
+    } else if (runtimeKind === 'gemini') {
+      // Gemini runtime
+      await startGeminiAgentProcess(
+        runtimeSelection.fallbackRuntime as 'cursor' | undefined,
+        session,
+        agentType,
+        payload,
+        agentDefinition ?? null,
+      );
     } else {
-      await startCursorAgentProcess(
+      // GPT runtime (codex or cursor)
+      await startGptAgentProcess(
+        runtimeKind as 'codex' | 'cursor',
+        runtimeSelection.fallbackRuntime as 'codex' | 'cursor' | undefined,
         session,
         agentType,
         payload,
@@ -1003,6 +1045,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     }
 
     const configuredModel = agentDefinition?.model ?? config.sdk?.model ?? null;
+    const configuredReasoningEffort = agentDefinition?.reasoningEffort ?? config.sdk?.reasoningEffort ?? null;
     const runtimeInitPayload = {
       sessionId: session.id,
       agentType,
@@ -1025,6 +1068,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         permissionMode: config.sdk?.permissionMode ?? null,
         fallbackModel: config.sdk?.fallbackModel ?? null,
         pathToClaudeCodeExecutable: claudeBinary,
+        reasoningEffort: configuredReasoningEffort,
       },
       availableMcps,
       parentMcps,
@@ -1047,13 +1091,41 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     }
   }
 
-  async function startCursorAgentProcess(
+  async function startGptAgentProcess(
+    primaryRuntime: 'codex' | 'cursor',
+    fallbackRuntime: 'codex' | 'cursor' | undefined,
     session: ReturnType<typeof createSession>,
     agentType: string,
     payload: StartAgentRequestPayload,
     agentDefinition: AgentDefinition | null = null,
   ): Promise<void> {
-    debugLog(`[cursor-runtime-start] sessionId=${session.id}, agentType=${agentType}`);
+    debugLog(
+      `[gpt-runtime-start] sessionId=${session.id}, agentType=${agentType}, primary=${primaryRuntime}, fallback=${fallbackRuntime ?? 'none'}`,
+    );
+
+    try {
+      await launchGptRuntime(primaryRuntime, session, agentType, payload, agentDefinition);
+    } catch (error) {
+      if (fallbackRuntime && fallbackRuntime !== primaryRuntime) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        debugLog(
+          `[gpt-runtime-fallback] sessionId=${session.id}, primary=${primaryRuntime} failed (${errorMsg}), trying fallback=${fallbackRuntime}`,
+        );
+        await launchGptRuntime(fallbackRuntime, session, agentType, payload, agentDefinition);
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  async function launchGptRuntime(
+    runtime: 'codex' | 'cursor',
+    session: ReturnType<typeof createSession>,
+    agentType: string,
+    payload: StartAgentRequestPayload,
+    agentDefinition: AgentDefinition | null = null,
+  ): Promise<void> {
+    debugLog(`[${runtime}-runtime-launch] sessionId=${session.id}, agentType=${agentType}`);
 
     const sessionLogPath = getSessionLogPath(
       context.projectHash,
@@ -1062,30 +1134,65 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     );
 
     const sdkPermissionMode = config.sdk?.permissionMode ?? 'bypassPermissions';
-    const baseCursorArgs = ['-p', '--output-format', 'stream-json'];
 
-    if (sdkPermissionMode === 'bypassPermissions') {
-      baseCursorArgs.push('--force');
-    }
+    // Determine binary path and arguments based on runtime
+    const gptConfig = wrapperConfig.gpt ?? {};
+    const runtimeConfig = runtime === 'codex' ? gptConfig.codex : gptConfig.cursor;
+    const legacyCursorConfig = wrapperConfig.cursor; // Backward compat
 
-    const modelOverride = agentDefinition?.model;
-    if (modelOverride && modelOverride.trim().length > 0) {
-      baseCursorArgs.push('--model', modelOverride);
-    }
+    const binaryPath = runtime === 'codex'
+      ? (runtimeConfig?.binaryPath ?? 'codex')
+      : (runtimeConfig?.binaryPath ?? 'cursor-agent');
 
-    const cursorPrompt = agentDefinition?.instructions
+    // Build CLI arguments based on runtime
+    let runtimeArgs: string[];
+    const fullPrompt = agentDefinition?.instructions
       ? `${agentDefinition.instructions}\n\n---\n\n${payload.prompt}`
       : payload.prompt;
 
-    const resolvedCursorArgs = [...baseCursorArgs, '--', cursorPrompt];
+    if (runtime === 'codex') {
+      // Codex: codex exec --json [--dangerously-bypass-approvals-and-sandbox] [--model MODEL] PROMPT
+      runtimeArgs = ['exec', '--json'];
+      if (sdkPermissionMode === 'bypassPermissions') {
+        runtimeArgs.push('--dangerously-bypass-approvals-and-sandbox');
+      }
+      const modelOverride = agentDefinition?.model;
+      if (modelOverride && modelOverride.trim().length > 0) {
+        runtimeArgs.push('--model', modelOverride);
+      }
+      // TODO: Verify Codex CLI flag for reasoning effort (may not be supported)
+      const reasoningEffortOverride = agentDefinition?.reasoningEffort;
+      if (reasoningEffortOverride) {
+        // Placeholder - verify actual flag name with Codex documentation
+        // runtimeArgs.push('--reasoning-effort', reasoningEffortOverride);
+      }
+      runtimeArgs.push(fullPrompt);
+    } else {
+      // Cursor: cursor-agent -p --output-format stream-json [--force] [--model MODEL] -- PROMPT
+      runtimeArgs = ['-p', '--output-format', 'stream-json'];
+      if (sdkPermissionMode === 'bypassPermissions') {
+        runtimeArgs.push('--force');
+      }
+      const modelOverride = agentDefinition?.model;
+      if (modelOverride && modelOverride.trim().length > 0) {
+        runtimeArgs.push('--model', modelOverride);
+      }
+      // TODO: Verify Cursor CLI flag for reasoning effort (may not be supported)
+      const reasoningEffortOverride = agentDefinition?.reasoningEffort;
+      if (reasoningEffortOverride) {
+        // Placeholder - verify actual flag name with Cursor documentation
+        // runtimeArgs.push('--reasoning-effort', reasoningEffortOverride);
+      }
+      runtimeArgs.push('--', fullPrompt);
+    }
 
     const fullSessionId = session.id;
     const shortSessionId = abbreviateSessionId(fullSessionId);
 
-    const cursorRetryConfig = wrapperConfig.cursor ?? {};
-    const maxStartupAttempts = Math.max(1, cursorRetryConfig.startupRetries ?? 3);
-    const retryDelayMs = Math.max(0, cursorRetryConfig.startupRetryDelayMs ?? 400);
-    const retryJitterMs = Math.max(0, cursorRetryConfig.startupRetryJitterMs ?? 200);
+    // Get retry configuration for this runtime (with backward compat)
+    const maxStartupAttempts = Math.max(1, runtimeConfig?.startupRetries ?? legacyCursorConfig?.startupRetries ?? 3);
+    const retryDelayMs = Math.max(0, runtimeConfig?.startupRetryDelayMs ?? legacyCursorConfig?.startupRetryDelayMs ?? 400);
+    const retryJitterMs = Math.max(0, runtimeConfig?.startupRetryJitterMs ?? legacyCursorConfig?.startupRetryJitterMs ?? 200);
 
     const runtimeState: AgentRuntimeState = {
       sessionId: session.id,
@@ -1094,7 +1201,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       status: 'pending',
       logPath: sessionLogPath,
       detached: Boolean(payload.options?.detach),
-      runtimeKind: 'cursor',
+      runtimeKind: runtime,
       cursorMeta: {
         attempts: 0,
         maxAttempts: maxStartupAttempts,
@@ -1105,36 +1212,55 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
     };
 
     agentRuntimes.set(session.id, runtimeState);
-    debugLog(`[cursor-runtime-tracked] sessionId=${session.id}`);
+    debugLog(`[${runtime}-runtime-tracked] sessionId=${session.id}`);
 
-    const forwardRuntimeEvent = (event: AgentRuntimeEvent): void => {
-      void handleAgentRuntimeEvent(session.id, event, runtimeState);
-    };
+    return new Promise<void>((resolve, reject) => {
+      // Flag to prevent duplicate resolve/reject calls
+      let settled = false;
 
-    const computeRetryDelay = (nextAttempt: number): number => {
-      const multiplier = Math.max(1, nextAttempt - 1);
-      const jitter = retryJitterMs > 0 ? Math.floor(Math.random() * retryJitterMs) : 0;
-      return retryDelayMs * multiplier + jitter;
-    };
+      const safeResolve = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
 
-    const emitStartupStatus = (attempt: number): void => {
-      const detail =
-        attempt === 1
-          ? 'Launching cursor-agent runtime'
-          : `Restarting cursor-agent runtime (attempt ${attempt}/${maxStartupAttempts})`;
-      forwardRuntimeEvent({
-        type: 'status',
-        status: 'starting',
-        detail,
-      });
-      if (attempt > 1) {
+      const safeReject = (error: Error) => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      };
+
+      const forwardRuntimeEvent = (event: AgentRuntimeEvent): void => {
+        void handleAgentRuntimeEvent(session.id, event, runtimeState);
+      };
+
+      const computeRetryDelay = (nextAttempt: number): number => {
+        const multiplier = Math.max(1, nextAttempt - 1);
+        const jitter = retryJitterMs > 0 ? Math.floor(Math.random() * retryJitterMs) : 0;
+        return retryDelayMs * multiplier + jitter;
+      };
+
+      const emitStartupStatus = (attempt: number): void => {
+        const runtimeLabel = runtime === 'codex' ? 'codex' : 'cursor-agent';
+        const detail =
+          attempt === 1
+            ? `Launching ${runtimeLabel} runtime`
+            : `Restarting ${runtimeLabel} runtime (attempt ${attempt}/${maxStartupAttempts})`;
         forwardRuntimeEvent({
-          type: 'log',
-          level: 'info',
-          message: `cursor-agent restart attempt ${attempt}/${maxStartupAttempts}`,
+          type: 'status',
+          status: 'starting',
+          detail,
         });
-      }
-    };
+        if (attempt > 1) {
+          forwardRuntimeEvent({
+            type: 'log',
+            level: 'info',
+            message: `${runtimeLabel} restart attempt ${attempt}/${maxStartupAttempts}`,
+          });
+        }
+      };
 
     function extractCursorText(event: Record<string, unknown>): string | null {
       const message = event.message;
@@ -1249,9 +1375,9 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       return events;
     }
 
-    const launchCursorAttempt = (attempt: number): void => {
+    const launchRuntimeAttempt = (attempt: number): void => {
       if (runtimeState.cursorMeta?.cancelled) {
-        debugLog(`[cursor-runtime-cancelled] sessionId=${session.id}, attempt=${attempt}`);
+        debugLog(`[${runtime}-runtime-cancelled] sessionId=${session.id}, attempt=${attempt}`);
         return;
       }
 
@@ -1261,7 +1387,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
       emitStartupStatus(attempt);
 
-      const child = spawn('cursor-agent', resolvedCursorArgs, {
+      const child = spawn(binaryPath, runtimeArgs, {
         cwd: context.projectRoot,
         env: {
           ...process.env,
@@ -1276,15 +1402,15 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       runtimeState.process = child;
       runtimeState.runtimeProcessId = null;
 
-      let observedCursorOutput = false;
+      let observedRuntimeOutput = false;
 
       child.once('spawn', async () => {
         if (!child.pid) {
-          debugLog(`[cursor-runtime-spawn-no-pid] sessionId=${session.id}`);
+          debugLog(`[${runtime}-runtime-spawn-no-pid] sessionId=${session.id}`);
           return;
         }
-        debugLog(`[cursor-runtime-spawned] sessionId=${session.id}, pid=${child.pid}`);
-        const runtimeProcess = createRuntimeProcess(session.id, child.pid, 'cursor', true);
+        debugLog(`[${runtime}-runtime-spawned] sessionId=${session.id}, pid=${child.pid}`);
+        const runtimeProcess = createRuntimeProcess(session.id, child.pid, runtime, true);
         runtimeState.runtimeProcessId = runtimeProcess.id;
         updateSessionProcessPid(session.id, child.pid);
         updateSessionStatus(session.id, 'running');
@@ -1303,26 +1429,30 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
       child.once('error', async (error) => {
         const message = error instanceof Error ? error.message : String(error);
-        debugLog(`[cursor-runtime-error] sessionId=${session.id}, error=${message}`);
+        debugLog(`[${runtime}-runtime-error] sessionId=${session.id}, error=${message}`);
         try {
           await recordSessionEvent(session.id, 'agent.runtime.process.error', {
             message,
-            runtime: 'cursor',
+            runtime,
           });
         } catch (recordError) {
           const recordMsg =
             recordError instanceof Error ? recordError.message : String(recordError);
-          console.error(`[cursor-runtime-error-record-failed] ${recordMsg}`);
+          console.error(`[${runtime}-runtime-error-record-failed] ${recordMsg}`);
         }
         updateSessionStatus(session.id, 'failed');
         markSessionEnded(session.id, 'failed');
         runtimeState.status = 'failed';
+
+        // Reject the promise to trigger fallback
+        const errorObj = error instanceof Error ? error : new Error(message);
+        safeReject(errorObj);
       });
 
       child.stdout?.setEncoding('utf8');
       let stdoutBuffer = '';
       child.stdout?.on('data', (chunk: string) => {
-        observedCursorOutput = true;
+        observedRuntimeOutput = true;
         stdoutBuffer += chunk;
         let newlineIndex = stdoutBuffer.indexOf('\n');
         while (newlineIndex >= 0) {
@@ -1331,12 +1461,22 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
           if (line.length > 0) {
             try {
               const parsed = JSON.parse(line) as unknown;
-              const events = mapCursorEvent(parsed);
+              if (!parsed || typeof parsed !== 'object') {
+                continue;
+              }
+              const event = parsed as Record<string, unknown>;
+              const type = typeof event.type === 'string' ? event.type : 'unknown';
+
+              // Parse events based on runtime
+              const events = runtime === 'codex'
+                ? parseCodexEvent(event, type)
+                : parseCursorEvent(event, type);
+
               if (events.length === 0) {
                 void recordSessionEvent(session.id, 'agent.runtime.event.unknown', parsed);
               } else {
-                for (const event of events) {
-                  forwardRuntimeEvent(event);
+                for (const evt of events) {
+                  forwardRuntimeEvent(evt);
                 }
               }
             } catch (error) {
@@ -1344,7 +1484,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
               void recordSessionEvent(session.id, 'agent.runtime.event.parse_error', {
                 line,
                 message,
-                source: 'cursor-agent',
+                source: runtime === 'codex' ? 'codex' : 'cursor-agent',
               });
             }
           }
@@ -1365,7 +1505,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       child.stderr?.setEncoding('utf8');
       let stderrBuffer = '';
       child.stderr?.on('data', (chunk: string) => {
-        observedCursorOutput = true;
+        observedRuntimeOutput = true;
         stderrBuffer += chunk;
         let newlineIndex = stderrBuffer.indexOf('\n');
         while (newlineIndex >= 0) {
@@ -1375,7 +1515,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
           if (data.length > 0) {
             void recordSessionEvent(session.id, 'agent.runtime.stderr', {
               data,
-              runtime: 'cursor',
+              runtime,
             });
           }
           newlineIndex = stderrBuffer.indexOf('\n');
@@ -1387,7 +1527,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         if (remaining.length > 0) {
           void recordSessionEvent(session.id, 'agent.runtime.stderr', {
             data: remaining,
-            runtime: 'cursor',
+            runtime,
           });
         }
         stderrBuffer = '';
@@ -1396,7 +1536,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
       child.once('exit', (code, signal) => {
         const exitInfo: ClaudeExitResult = { code, signal };
         const inferredStatus = mapExitToStatus(exitInfo);
-        const wasStartupFailure = !observedCursorOutput;
+        const wasStartupFailure = !observedRuntimeOutput;
         const hasAttemptsRemaining = attempt < maxStartupAttempts;
         const cancelled = runtimeState.cursorMeta?.cancelled ?? false;
         const shouldRetry = wasStartupFailure && hasAttemptsRemaining && !cancelled;
@@ -1415,27 +1555,373 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
               runtimeState.cursorMeta.lastExitStatus = inferredStatus;
             }
             debugLog(
-              `[cursor-runtime-retry] sessionId=${session.id}, nextAttempt=${nextAttempt}, delay=${delay}ms`,
+              `[${runtime}-runtime-retry] sessionId=${session.id}, nextAttempt=${nextAttempt}, delay=${delay}ms`,
             );
             if (runtimeState.cursorMeta) {
               runtimeState.cursorMeta.pendingRetryTimer = setTimeout(() => {
                 runtimeState.cursorMeta!.pendingRetryTimer = null;
-                launchCursorAttempt(nextAttempt);
+                launchRuntimeAttempt(nextAttempt);
               }, delay);
               const timer = runtimeState.cursorMeta.pendingRetryTimer;
               if (timer && typeof timer.unref === 'function') {
                 timer.unref();
               }
             } else {
-              launchCursorAttempt(nextAttempt);
+              launchRuntimeAttempt(nextAttempt);
             }
             await recordSessionEvent(session.id, 'agent.runtime.retry', {
-              runtime: 'cursor',
+              runtime,
               attempt,
               nextAttempt,
               maxAttempts: maxStartupAttempts,
               delayMs: delay,
-              reason: 'cursor_startup_no_output',
+              reason: `${runtime}_startup_no_output`,
+            });
+          } else {
+            // All retries exhausted - resolve or reject based on final status
+            agentRuntimes.delete(session.id);
+            if (inferredStatus === 'failed') {
+              safeReject(
+                new Error(
+                  `${runtime} runtime failed after ${attempt} attempt(s) (exit code: ${code ?? 'null'}, signal: ${signal ?? 'null'})`,
+                ),
+              );
+            } else {
+              // Success or completed status
+              safeResolve();
+            }
+          }
+        })().catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(
+            `[${runtime}-runtime-exit-handler-error] sessionId=${session.id}, error=${message}`,
+          );
+          agentRuntimes.delete(session.id);
+          safeReject(error instanceof Error ? error : new Error(message));
+        });
+      });
+    };
+
+      launchRuntimeAttempt(1);
+    });
+  }
+
+  async function startGeminiAgentProcess(
+    fallbackRuntime: 'cursor' | undefined,
+    session: ReturnType<typeof createSession>,
+    agentType: string,
+    payload: StartAgentRequestPayload,
+    agentDefinition: AgentDefinition | null = null,
+  ): Promise<void> {
+    debugLog(
+      `[gemini-runtime-start] sessionId=${session.id}, agentType=${agentType}, fallback=${fallbackRuntime ?? 'none'}`,
+    );
+
+    try {
+      await launchGeminiRuntime(session, agentType, payload, agentDefinition);
+    } catch (error) {
+      if (fallbackRuntime) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        debugLog(
+          `[gemini-runtime-fallback] sessionId=${session.id}, gemini failed (${errorMsg}), trying fallback=${fallbackRuntime}`,
+        );
+        await launchGptRuntime(fallbackRuntime, session, agentType, payload, agentDefinition);
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  async function launchGeminiRuntime(
+    session: ReturnType<typeof createSession>,
+    agentType: string,
+    payload: StartAgentRequestPayload,
+    agentDefinition: AgentDefinition | null = null,
+  ): Promise<void> {
+    const runtime = 'gemini';
+    debugLog(`[${runtime}-runtime-launch] sessionId=${session.id}, agentType=${agentType}`);
+
+    const sessionLogPath = getSessionLogPath(
+      context.projectHash,
+      session.id,
+      wrapperConfig.projectsDir,
+    );
+
+    // Determine binary path and model
+    const gptConfig = wrapperConfig.gpt ?? {};
+    const geminiConfig = gptConfig.gemini ?? {};
+    const binaryPath = geminiConfig.binaryPath ?? 'gemini';
+
+    // Get retry configuration for Gemini runtime
+    const maxStartupAttempts = Math.max(1, geminiConfig?.startupRetries ?? 3);
+    const retryDelayMs = Math.max(0, geminiConfig?.startupRetryDelayMs ?? 400);
+    const retryJitterMs = Math.max(0, geminiConfig?.startupRetryJitterMs ?? 200);
+
+    // Build CLI arguments based on Gemini CLI spec: [-m, model, --output-format, stream-json, --yolo, -p, prompt]
+    let runtimeArgs: string[];
+    const fullPrompt = agentDefinition?.instructions
+      ? `${agentDefinition.instructions}\n\n---\n\n${payload.prompt}`
+      : payload.prompt;
+
+    runtimeArgs = [];
+
+    const modelOverride = agentDefinition?.model;
+    if (modelOverride && modelOverride.trim().length > 0) {
+      runtimeArgs.push('-m', modelOverride);
+    }
+
+    // TODO: Verify Gemini CLI flag for reasoning effort (may not be supported)
+    const reasoningEffortOverride = agentDefinition?.reasoningEffort;
+    if (reasoningEffortOverride) {
+      // Placeholder - verify actual flag name with Gemini CLI documentation
+      // runtimeArgs.push('--reasoning-effort', reasoningEffortOverride);
+    }
+
+    runtimeArgs.push('--output-format', 'stream-json', '--yolo', '-p', fullPrompt);
+
+    const fullSessionId = session.id;
+    const shortSessionId = abbreviateSessionId(fullSessionId);
+
+    const runtimeState: AgentRuntimeState = {
+      sessionId: session.id,
+      process: null as unknown as ChildProcess,
+      runtimeProcessId: null,
+      status: 'pending',
+      logPath: sessionLogPath,
+      detached: Boolean(payload.options?.detach),
+      runtimeKind: runtime,
+      cursorMeta: {
+        attempts: 0,
+        maxAttempts: maxStartupAttempts,
+        pendingRetryTimer: null,
+        cancelled: false,
+        awaitingRetry: false,
+      },
+    };
+
+    agentRuntimes.set(session.id, runtimeState);
+    debugLog(`[${runtime}-runtime-tracked] sessionId=${session.id}`);
+
+    const forwardRuntimeEvent = (event: AgentRuntimeEvent): void => {
+      void handleAgentRuntimeEvent(session.id, event, runtimeState);
+    };
+
+    const computeRetryDelay = (nextAttempt: number): number => {
+      const multiplier = Math.max(1, nextAttempt - 1);
+      const jitter = retryJitterMs > 0 ? Math.floor(Math.random() * retryJitterMs) : 0;
+      return retryDelayMs * multiplier + jitter;
+    };
+
+    const launchRuntimeAttempt = (attempt: number): void => {
+      if (runtimeState.cursorMeta?.cancelled) {
+        debugLog(`[${runtime}-runtime-cancelled] sessionId=${session.id}, attempt=${attempt}`);
+        return;
+      }
+
+      runtimeState.cursorMeta!.attempts = attempt;
+      runtimeState.cursorMeta!.pendingRetryTimer = null;
+      runtimeState.cursorMeta!.awaitingRetry = false;
+
+      const detail =
+        attempt === 1
+          ? 'Launching gemini runtime'
+          : `Restarting gemini runtime (attempt ${attempt}/${maxStartupAttempts})`;
+      forwardRuntimeEvent({
+        type: 'status',
+        status: 'starting',
+        detail,
+      });
+      if (attempt > 1) {
+        forwardRuntimeEvent({
+          type: 'log',
+          level: 'info',
+          message: `gemini restart attempt ${attempt}/${maxStartupAttempts}`,
+        });
+      }
+
+      const child = spawn(binaryPath, runtimeArgs, {
+        cwd: context.projectRoot,
+        env: {
+          ...process.env,
+          KLAUDE_PROJECT_HASH: context.projectHash,
+          KLAUDE_INSTANCE_ID: instanceId,
+          KLAUDE_SESSION_ID: fullSessionId,
+          KLAUDE_SESSION_ID_SHORT: shortSessionId,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      runtimeState.process = child;
+      runtimeState.runtimeProcessId = null;
+
+      let observedRuntimeOutput = false;
+
+      child.once('spawn', async () => {
+        if (!child.pid) {
+          debugLog(`[${runtime}-runtime-spawn-no-pid] sessionId=${session.id}`);
+          return;
+        }
+        debugLog(`[${runtime}-runtime-spawned] sessionId=${session.id}, pid=${child.pid}`);
+        const runtimeProcess = createRuntimeProcess(session.id, child.pid, runtime, true);
+        runtimeState.runtimeProcessId = runtimeProcess.id;
+        updateSessionProcessPid(session.id, child.pid);
+        updateSessionStatus(session.id, 'running');
+        runtimeState.status = 'running';
+
+        await recordSessionEvent(session.id, 'agent.runtime.spawned', {
+          pid: child.pid,
+          detached: runtimeState.detached,
+          agentType,
+          definitionName: agentDefinition?.name ?? null,
+          definitionScope: agentDefinition?.scope ?? null,
+          runtimeKind: runtimeState.runtimeKind,
+          attempt,
+        });
+      });
+
+      child.once('error', async (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        debugLog(`[${runtime}-runtime-error] sessionId=${session.id}, error=${message}`);
+        try {
+          await recordSessionEvent(session.id, 'agent.runtime.process.error', {
+            message,
+            runtime,
+          });
+        } catch (recordError) {
+          const recordMsg =
+            recordError instanceof Error ? recordError.message : String(recordError);
+          console.error(`[${runtime}-runtime-error-record-failed] ${recordMsg}`);
+        }
+        updateSessionStatus(session.id, 'failed');
+        markSessionEnded(session.id, 'failed');
+        runtimeState.status = 'failed';
+      });
+
+      child.stdout?.setEncoding('utf8');
+      let stdoutBuffer = '';
+      child.stdout?.on('data', (chunk: string) => {
+        observedRuntimeOutput = true;
+        stdoutBuffer += chunk;
+        let newlineIndex = stdoutBuffer.indexOf('\n');
+        while (newlineIndex >= 0) {
+          const line = stdoutBuffer.slice(0, newlineIndex).trim();
+          stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+          if (line.length > 0) {
+            try {
+              const parsed = JSON.parse(line) as unknown;
+              if (!parsed || typeof parsed !== 'object') {
+                continue;
+              }
+              const event = parsed as Record<string, unknown>;
+              const type = typeof event.type === 'string' ? event.type : 'unknown';
+
+              // Parse events using Gemini parser
+              const events = parseGeminiEvent(event, type);
+
+              if (events.length === 0) {
+                void recordSessionEvent(session.id, 'agent.runtime.event.unknown', parsed);
+              } else {
+                for (const evt of events) {
+                  forwardRuntimeEvent(evt);
+                }
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              void recordSessionEvent(session.id, 'agent.runtime.event.parse_error', {
+                line,
+                message,
+                source: 'gemini-cli',
+              });
+            }
+          }
+          newlineIndex = stdoutBuffer.indexOf('\n');
+        }
+      });
+
+      child.stdout?.on('end', () => {
+        const remaining = stdoutBuffer.trim();
+        if (remaining.length > 0) {
+          void recordSessionEvent(session.id, 'agent.runtime.stdout.trailing', {
+            data: remaining,
+          });
+        }
+        stdoutBuffer = '';
+      });
+
+      child.stderr?.setEncoding('utf8');
+      let stderrBuffer = '';
+      child.stderr?.on('data', (chunk: string) => {
+        observedRuntimeOutput = true;
+        stderrBuffer += chunk;
+        let newlineIndex = stderrBuffer.indexOf('\n');
+        while (newlineIndex >= 0) {
+          const line = stderrBuffer.slice(0, newlineIndex);
+          stderrBuffer = stderrBuffer.slice(newlineIndex + 1);
+          const data = line.trim();
+          if (data.length > 0) {
+            void recordSessionEvent(session.id, 'agent.runtime.stderr', {
+              data,
+              runtime,
+            });
+          }
+          newlineIndex = stderrBuffer.indexOf('\n');
+        }
+      });
+
+      child.stderr?.on('end', () => {
+        const remaining = stderrBuffer.trim();
+        if (remaining.length > 0) {
+          void recordSessionEvent(session.id, 'agent.runtime.stderr', {
+            data: remaining,
+            runtime,
+          });
+        }
+        stderrBuffer = '';
+      });
+
+      child.once('exit', (code, signal) => {
+        const exitInfo: ClaudeExitResult = { code, signal };
+        const inferredStatus = mapExitToStatus(exitInfo);
+        const wasStartupFailure = !observedRuntimeOutput;
+        const hasAttemptsRemaining = attempt < maxStartupAttempts;
+        const cancelled = runtimeState.cursorMeta?.cancelled ?? false;
+        const shouldRetry = wasStartupFailure && hasAttemptsRemaining && !cancelled;
+
+        void (async () => {
+          await handleAgentRuntimeExit(session.id, exitInfo, runtimeState, {
+            skipSessionFinalization: shouldRetry,
+            eventExtras: { attempt },
+          });
+
+          if (shouldRetry) {
+            const nextAttempt = attempt + 1;
+            const delay = computeRetryDelay(nextAttempt);
+            if (runtimeState.cursorMeta) {
+              runtimeState.cursorMeta.awaitingRetry = true;
+              runtimeState.cursorMeta.lastExitStatus = inferredStatus;
+            }
+            debugLog(
+              `[${runtime}-runtime-retry] sessionId=${session.id}, nextAttempt=${nextAttempt}, delay=${delay}ms`,
+            );
+            if (runtimeState.cursorMeta) {
+              runtimeState.cursorMeta.pendingRetryTimer = setTimeout(() => {
+                runtimeState.cursorMeta!.pendingRetryTimer = null;
+                launchRuntimeAttempt(nextAttempt);
+              }, delay);
+              const timer = runtimeState.cursorMeta.pendingRetryTimer;
+              if (timer && typeof timer.unref === 'function') {
+                timer.unref();
+              }
+            } else {
+              launchRuntimeAttempt(nextAttempt);
+            }
+            await recordSessionEvent(session.id, 'agent.runtime.retry', {
+              runtime,
+              attempt,
+              nextAttempt,
+              maxAttempts: maxStartupAttempts,
+              delayMs: delay,
+              reason: `${runtime}_startup_no_output`,
             });
           } else {
             agentRuntimes.delete(session.id);
@@ -1443,15 +1929,16 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
         })().catch((error) => {
           const message = error instanceof Error ? error.message : String(error);
           console.error(
-            `[cursor-runtime-exit-handler-error] sessionId=${session.id}, error=${message}`,
+            `[${runtime}-runtime-exit-handler-error] sessionId=${session.id}, error=${message}`,
           );
           agentRuntimes.delete(session.id);
         });
       });
     };
 
-    launchCursorAttempt(1);
+    launchRuntimeAttempt(1);
   }
+
   async function waitForClaudeSessionId(
     sessionId: string,
     waitSeconds: number,
@@ -1946,7 +2433,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     if (runtime && runtime.runtimeKind !== 'claude') {
       throw new KlaudeError(
-        'Cursor-backed sessions do not support messaging; start a new run instead',
+        'GPT runtime sessions do not support messaging; start a new run instead',
         'E_AGENT_MESSAGE_UNSUPPORTED',
       );
     }
@@ -2038,7 +2525,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
       if (runtimeKind !== 'claude') {
         throw new KlaudeError(
-          'Cursor-backed sessions do not support messaging; start a new run instead',
+          'GPT runtime sessions do not support messaging; start a new run instead',
           'E_AGENT_MESSAGE_UNSUPPORTED',
         );
       }
@@ -2110,7 +2597,7 @@ export async function startWrapperInstance(options: WrapperStartOptions = {}): P
 
     if (runtime.runtimeKind !== 'claude') {
       throw new KlaudeError(
-        'Cursor-backed sessions do not support messaging; start a new run instead',
+        'GPT runtime sessions do not support messaging; start a new run instead',
         'E_AGENT_MESSAGE_UNSUPPORTED',
       );
     }

@@ -72,7 +72,7 @@ export interface RuntimeProcess {
   id: number;
   klaude_session_id: string;
   pid: number;
-  kind: 'wrapper' | 'claude' | 'sdk' | 'cursor';
+  kind: 'wrapper' | 'claude' | 'sdk' | 'cursor' | 'codex' | 'gemini';
   started_at: string;
   exited_at: string | null;
   exit_code: number | null;
