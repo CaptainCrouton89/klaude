@@ -36,6 +36,7 @@
   },
   "files": [
     "dist",
+    "agents",
     "README.md",
     "package.json",
     "LICENSE"
