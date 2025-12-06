@@ -14,3 +14,5 @@ test-query.js
 DEBUG_*.md
 todo.md
 THREE_*.md.obsidian/
+.claude/explore/
+.claude/plans/

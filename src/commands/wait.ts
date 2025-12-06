@@ -11,7 +11,8 @@ import { printError } from '@/utils/error-handler.js';
 import { resolveProjectDirectory, abbreviateSessionId } from '@/utils/cli-helpers.js';
 import { resolveSessionId } from '@/db/models/session.js';
 import { getSessionLogPath } from '@/utils/path-helper.js';
-import { collectCompletionInfo } from '@/services/session-log.js';
+import { collectCompletionInfo, saveAgentOutput } from '@/services/session-log.js';
+import { loadAgentDefinition } from '@/services/agent-definitions.js';
 
 /**
  * Terminal session statuses that indicate completion
@@ -32,22 +33,47 @@ async function displaySessionSummary(
   sessionId: string,
   status: string,
   projectHash: string,
+  projectRoot: string,
+  agentType: string | null,
   projectsDir?: string
 ): Promise<void> {
-  const statusIcon = status === 'done' ? '✅' : status === 'failed' ? '❌' : '⚠️';
-  console.log(`${statusIcon} Session ${abbreviateSessionId(sessionId)} → ${status}`);
+  console.log(`Agent ${abbreviateSessionId(sessionId)} response:`);
 
   // Try to get completion info from log
   try {
     const logPath = getSessionLogPath(projectHash, sessionId, projectsDir);
     const info = await collectCompletionInfo(logPath);
 
-    // Display file changes first
+    // Check if agent has outputDir configured and save output
+    let savedPath: string | null = null;
+    if (agentType && info.finalText && status === 'done') {
+      const agentDef = await loadAgentDefinition(agentType, { projectRoot });
+      if (agentDef?.outputDir) {
+        try {
+          savedPath = await saveAgentOutput(projectRoot, agentDef.outputDir, info.finalText);
+        } catch {
+          // Silently fail if we can't save (e.g., permission issues)
+        }
+      }
+    }
+
+    // Display saved file path first if applicable
+    if (savedPath) {
+      console.log();
+      console.log('Created:');
+      console.log(savedPath);
+    }
+
+    // Display file changes
     const hasFileChanges = info.filesEdited.length > 0 || info.filesCreated.length > 0;
     if (hasFileChanges) {
-      console.log(); // blank line before file list
+      if (!savedPath) {
+        console.log(); // blank line before file list (only if we didn't already print saved path)
+      }
       if (info.filesEdited.length > 0) {
-        console.log('Edited:');
+        if (!savedPath) {
+          console.log('Edited:');
+        }
         for (const file of info.filesEdited) {
           console.log(file);
         }
@@ -56,7 +82,9 @@ async function displaySessionSummary(
         }
       }
       if (info.filesCreated.length > 0) {
-        console.log('Created:');
+        if (!savedPath) {
+          console.log('Created:');
+        }
         for (const file of info.filesCreated) {
           console.log(file);
         }
@@ -67,6 +95,10 @@ async function displaySessionSummary(
     if (info.error) {
       console.log();
       console.log(`Error: ${info.error.split('\n')[0]}`); // First line only
+    } else if (savedPath) {
+      // Output was saved to file - show concise message with handoff instructions
+      console.log();
+      console.log(`Share this file with implementing agents if needed.`);
     } else if (info.finalText) {
       console.log();
       console.log(info.finalText);
@@ -128,33 +160,28 @@ export function registerWaitCommand(program: Command): void {
           // Track start time for timeout
           const startTime = Date.now();
 
-          // Show initial status
-          console.log(`⏳ Waiting for ${waitForAny ? 'ANY' : 'ALL'} of ${sessionIds.length} session(s) to complete...`);
-          for (const session of sessions) {
-            console.log(`   ${abbreviateSessionId(session.id)} [${session.status}]`);
-          }
-
-          // Poll loop
+          // Poll loop (silent waiting)
           while (true) {
             // Check timeout
             if (Date.now() - startTime > timeoutMs) {
-              console.log(); // blank line before progress
-              console.log(`⏱️ Timeout after 9m30s. Current progress:`);
-              console.log(); // blank line before summaries
+              console.log(`Timeout after 9m30s. Current progress:`);
+              console.log();
 
               // Display progress for all sessions
               for (let i = 0; i < resolvedSessionIds.length; i++) {
-                const status = getSessionById(resolvedSessionIds[i])?.status;
-                if (status) {
+                const session = getSessionById(resolvedSessionIds[i]);
+                if (session?.status) {
+                  if (i > 0) {
+                    console.log('\n---\n');
+                  }
                   await displaySessionSummary(
                     resolvedSessionIds[i],
-                    status,
+                    session.status,
                     context.projectHash,
+                    context.projectRoot,
+                    session.title,
                     config.wrapper?.projectsDir
                   );
-                  if (i < resolvedSessionIds.length - 1) {
-                    console.log(); // blank line between sessions
-                  }
                 }
               }
 
@@ -175,17 +202,23 @@ export function registerWaitCommand(program: Command): void {
               // ANY: Return if at least one session is terminal
               const anyTerminal = statuses.some((status) => status && isTerminal(status));
               if (anyTerminal) {
-                console.log(); // blank line before summaries
+                let printed = 0;
                 for (let i = 0; i < resolvedSessionIds.length; i++) {
                   const status = statuses[i];
                   if (status && isTerminal(status)) {
+                    if (printed > 0) {
+                      console.log('\n---\n');
+                    }
+                    const session = getSessionById(resolvedSessionIds[i]);
                     await displaySessionSummary(
                       resolvedSessionIds[i],
                       status,
                       context.projectHash,
+                      context.projectRoot,
+                      session?.title ?? null,
                       config.wrapper?.projectsDir
                     );
-                    console.log(); // blank line between sessions
+                    printed++;
                   }
                 }
                 return;
@@ -194,17 +227,19 @@ export function registerWaitCommand(program: Command): void {
               // ALL: Return if all sessions are terminal
               const allTerminal = statuses.every((status) => status && isTerminal(status));
               if (allTerminal) {
-                console.log(); // blank line before summaries
                 for (let i = 0; i < resolvedSessionIds.length; i++) {
+                  if (i > 0) {
+                    console.log('\n---\n');
+                  }
+                  const session = getSessionById(resolvedSessionIds[i]);
                   await displaySessionSummary(
                     resolvedSessionIds[i],
                     statuses[i]!,
                     context.projectHash,
+                    context.projectRoot,
+                    session?.title ?? null,
                     config.wrapper?.projectsDir
                   );
-                  if (i < resolvedSessionIds.length - 1) {
-                    console.log(); // blank line between sessions
-                  }
                 }
                 return;
               }

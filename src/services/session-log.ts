@@ -1,5 +1,7 @@
 import { promises as fsp } from 'node:fs';
+import path from 'node:path';
 import type { SessionLogEvent } from '@/types/index.js';
+import { generateRandomFilename } from '@/utils/random-words.js';
 
 /**
  * Completion information extracted from a session log
@@ -558,10 +560,14 @@ export async function collectCompletionInfo(logPath: string): Promise<SessionCom
       }
 
       // Also check agent.runtime.result for final text fallback
+      // Note: result can be nested (payload.result.result) for SDK responses
       if (event.kind === 'agent.runtime.result') {
-        const payload = event.payload as { result?: string } | undefined;
-        if (payload?.result?.trim()) {
-          result.finalText = payload.result.trim();
+        const payload = event.payload as { result?: { result?: string } | string } | undefined;
+        const resultText = typeof payload?.result === 'object'
+          ? payload.result.result
+          : payload?.result;
+        if (resultText?.trim()) {
+          result.finalText = resultText.trim();
         }
       }
 
@@ -610,4 +616,33 @@ export async function collectCompletionInfo(logPath: string): Promise<SessionCom
   }
 
   return result;
+}
+
+/**
+ * Save agent output to a file in the project's .claude directory.
+ * Creates the output directory if it doesn't exist.
+ *
+ * @param projectRoot - The project root directory
+ * @param outputDir - Subdirectory under .claude/ (e.g., 'plans', 'explore')
+ * @param content - The content to save
+ * @returns The absolute path to the saved file
+ */
+export async function saveAgentOutput(
+  projectRoot: string,
+  outputDir: string,
+  content: string,
+): Promise<string> {
+  const targetDir = path.join(projectRoot, '.claude', outputDir);
+
+  // Create directory if it doesn't exist
+  await fsp.mkdir(targetDir, { recursive: true });
+
+  // Generate random filename
+  const filename = generateRandomFilename();
+  const filePath = path.join(targetDir, filename);
+
+  // Write content
+  await fsp.writeFile(filePath, content, 'utf-8');
+
+  return filePath;
 }

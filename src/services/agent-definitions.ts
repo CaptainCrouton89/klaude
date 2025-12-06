@@ -42,6 +42,12 @@ export interface AgentDefinition {
    * If not specified, uses config default (auto mode)
    */
   runtime?: 'codex' | 'cursor';
+  /**
+   * Output directory for auto-saving agent output
+   * Relative to project's .claude/ directory (e.g., 'plans' → .claude/plans/)
+   * When set, wait command will save finalText to this directory
+   */
+  outputDir?: string;
 }
 
 export interface AgentDefinitionLoadOptions {
@@ -246,6 +252,7 @@ async function parseAgentFile(
   const inheritParentMcps = parseBoolean(metadataEntries.get('inheritparentmcps'));
   const reasoningEffort = parseReasoningEffort(metadataEntries.get('reasoningeffort'));
   const runtime = parseRuntime(metadataEntries.get('runtime'));
+  const outputDir = sanitizeText(metadataEntries.get('outputdir'));
 
   return {
     type: normalizedType,
@@ -262,6 +269,7 @@ async function parseAgentFile(
     inheritProjectMcps,
     inheritParentMcps,
     runtime: runtime || undefined,
+    outputDir: outputDir || undefined,
   };
 }
 
