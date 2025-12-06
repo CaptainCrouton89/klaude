@@ -22,7 +22,11 @@ export async function resolveInstanceForProject(
     );
   }
 
-  const envInstanceId = options.envInstanceId ?? process.env.KLAUDE_INSTANCE_ID ?? null;
+  // Only use KLAUDE_INSTANCE_ID if KLAUDE_PROJECT_HASH matches current project.
+  // If hashes don't match, the env vars are from a different project and don't apply.
+  const envProjectHash = process.env.KLAUDE_PROJECT_HASH ?? null;
+  const envInstanceIdRaw = options.envInstanceId ?? process.env.KLAUDE_INSTANCE_ID ?? null;
+  const envInstanceId = (envProjectHash === context.projectHash) ? envInstanceIdRaw : null;
 
   const filterRunning = (entry: typeof instances[number]) =>
     options.allowEnded ? true : entry.endedAt === null;
