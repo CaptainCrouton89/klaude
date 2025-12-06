@@ -286,7 +286,8 @@ async function buildQueryOptions(
   // Add agent instructions as appended system prompt if provided
   if (init.outputStyle && init.outputStyle.trim().length > 0) {
     options.systemPrompt = init.outputStyle
-    options.settingSources = ['project'];
+    // Include both project and user settings to get user slash commands, skills, etc.
+    options.settingSources = ['project', 'user'];
   }
 
   return options;
@@ -357,6 +358,26 @@ async function run(): Promise<void> {
         currentSessionId = message.session_id;
         emit({ type: 'claude-session', sessionId: message.session_id, transcriptPath: null });
         announcedSessionId = true;
+      }
+
+      // Log slash commands from init message
+      if (message.type === 'system' && 'subtype' in message && message.subtype === 'init') {
+        const initMessage = message as { slash_commands?: string[]; tools?: string[]; skills?: string[] };
+        emit({
+          type: 'log',
+          level: 'info',
+          message: `Available slash_commands: ${JSON.stringify(initMessage.slash_commands ?? [])}`,
+        });
+        emit({
+          type: 'log',
+          level: 'info',
+          message: `Available tools: ${JSON.stringify(initMessage.tools ?? [])}`,
+        });
+        emit({
+          type: 'log',
+          level: 'info',
+          message: `Available skills: ${JSON.stringify(initMessage.skills ?? [])}`,
+        });
       }
 
       const text = extractMessageText(message);

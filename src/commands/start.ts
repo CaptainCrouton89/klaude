@@ -21,6 +21,7 @@ export function registerStartCommand(program: Command): void {
     .option('-v, --verbose', 'Verbose: print debug details (instance, log path)')
     .option('--instance <id>', 'Target instance id')
     .option('-C, --cwd <path>', 'Project directory override')
+    .allowUnknownOption(true) // Ignore unrecognized options (e.g., --timeout passed by Task tool)
     .action(async (agentType: string, prompt: string, agentCountArg: string | undefined, options: OptionValues) => {
       try {
         const projectCwd = resolveProjectDirectory(options.cwd);
